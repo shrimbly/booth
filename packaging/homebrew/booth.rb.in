@@ -7,7 +7,7 @@ cask "booth" do
 
   url "https://github.com/@REPOSITORY@/releases/download/v#{version}/Booth-#{version}.dmg"
   name "Booth"
-  desc "Studio-quality voice for your recordings, enhanced on your Mac"
+  desc "Studio-quality voice for your recordings, enhanced locally"
   homepage "@HOMEPAGE@"
 
   livecheck do
@@ -16,8 +16,8 @@ cask "booth" do
   end
 
   depends_on arch: :arm64
-  depends_on macos: ">= :sonoma"
   depends_on formula: "ffmpeg"
+  depends_on macos: :sonoma
 
   app "Booth.app"
   binary "#{appdir}/Booth.app/Contents/Resources/bin/booth"
