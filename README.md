@@ -2,6 +2,13 @@
 
 **Studio-quality voice for your recordings, enhanced on your Mac.**
 
+[Website](https://getbooth.vercel.app) · [Download for Mac](https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg) · `brew install shrimbly/booth/booth`
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/booth-dark.png">
+  <img src="docs/images/booth-light.png" width="320" alt="Booth's popover after enhancing interview-take3.mp4: a player with its waveform, Hold ⌥ to compare, and the Speech, Background and Music levels">
+</picture>
+
 Booth cleans up the voice in any video or audio file. It lives in the menu bar: drop a recording on
 it and `<name>-enhanced` appears beside the original, with the voice restored, the room and the
 noise turned down, and the picture left as it was. It is the same kind of model as Adobe Podcast's
@@ -32,8 +39,9 @@ $ booth interview.mp4 podcast.wav
 
 ### Download
 
-Download `Booth.dmg` from the website (or the [latest release](https://github.com/shrimbly/booth/releases/latest)),
-open it, and drag Booth to Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
+Download `Booth.dmg` from the [website](https://getbooth.vercel.app) (or the
+[latest release](https://github.com/shrimbly/booth/releases/latest)), open it, and drag Booth to
+Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
 
 The first time, Booth sets up its engine and downloads the voice models: about 1.1 GB, once. If
 you don't have ffmpeg, install it with [Homebrew](https://brew.sh): `brew install ffmpeg`.
@@ -257,8 +265,10 @@ as a deploy key. Each works on its own, so after renewing the certificate, run j
 
 `site/` is a single static page: one sentence with a player for a 30-second before/after clip
 (hold ⌥ to hear the original) and a short video of Booth at work behind "menu bar". To try it,
-open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. It deploys to
-any static host as it is: the download button links to `Booth.dmg` on the latest GitHub release.
+open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. Vercel deploys
+it to [getbooth.vercel.app](https://getbooth.vercel.app) from every push to `main` (the project's
+root directory is `site/`; `site/.vercelignore` keeps `tools/` off the web). The download button
+links to `Booth.dmg` on the latest GitHub release.
 To replace the before/after clip:
 
 ```bash
