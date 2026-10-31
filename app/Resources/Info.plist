@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for Booth.app/Contents/Info.plist. scripts/build-app.sh copies it and adds BoothEnginePath
+  (the repo's .venv/bin/booth) when that engine exists on the build machine.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>Booth</string>
+	<key>CFBundleIdentifier</key>
+	<string>studio.booth.Booth</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Booth</string>
+	<key>CFBundleDisplayName</key>
+	<string>Booth</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>Booth</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<!-- A menu bar app: no Dock icon, no main menu. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Registers Resources/Fonts/* (Newsreader italic for the signature) for this process. -->
+	<key>ATSApplicationFontsPath</key>
+	<string>Fonts</string>
+	<!-- ⌃⌥E asks Finder for its selection over Apple Events. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Booth asks Finder which files are selected when you press ⌃⌥E, so it can enhance them.</string>
+	<!--
+	  Finder Quick Action and Services menu item. NSApp.servicesProvider answers
+	  enhanceWithBooth(_:userData:error:) (Shell/ServicesProvider.swift); NSRequiredContext enables it by default and lists it under
+	  Quick Actions.
+	-->
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Enhance with Booth</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>enhanceWithBooth</string>
+			<key>NSPortName</key>
+			<string>Booth</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.audio</string>
+				<string>public.movie</string>
+				<string>public.audiovisual-content</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Open With and drops onto the app enqueue files; Booth never claims to be the default handler. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.audio</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Video</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.audiovisual-content</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

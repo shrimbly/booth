@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booth</title>
+<meta name="description" content="Studio speech for any video or recording, right from your Mac's menu bar. Free, open source and 100% local.">
+<meta property="og:title" content="Booth">
+<meta property="og:description" content="Studio speech for any video or recording, right from your menu bar.">
+<meta property="og:image" content="assets/booth-icon.png">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="assets/favicon.png">
+<script>document.documentElement.classList.add("js");</script>
+<style>
+@font-face {
+  font-family: "Geist Serif";
+  src: url("assets/GeistSerif-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+:root {
+  --paper: #f6f6f4;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: rgba(60, 60, 67, 0.26);
+  --fill: rgba(29, 29, 31, 0.06);
+  --github: #8250df;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  /* The sentence's size. Every space on the page is a multiple of the gap its line spacing
+     leaves between two lines: 0.6 of the size, at a line height of 1.6. */
+  --size: clamp(21px, 5.4vw, 26px);
+  --unit: calc(var(--size) * 0.6);
+  --serif: "Geist Serif", "New York", ui-serif, Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.4 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+.page {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* More room below than above lifts the text a little above the middle. */
+  padding: 48px clamp(20px, 8vw, 128px) 96px;
+}
+main { width: 100%; max-width: 640px; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* -- the name: drawn as in the popover, Geist Serif Semibold in 40% ink, a little soft ---------- */
+/* As in the app, the pointer brings the letters right around it partly into focus: the name is
+   drawn twice, at rest and in focus, and a soft round patch on the pointer cross-fades between
+   them. The app's 44 pt numbers are scaled to 56 px here. */
+@property --s { syntax: "<number>"; inherits: true; initial-value: 0; }
+@property --x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --y { syntax: "<length>"; inherits: true; initial-value: 0px; }
+.name {
+  position: relative;
+  /* Its own formatting context, so the drawings' negative margins don't collapse through it and
+     shift the resting drawing away from the focused one. */
+  display: flow-root;
+  width: fit-content;
+  margin: 0 0 calc(var(--unit) * 1.5);
+  font: 400 56px/0.8 var(--serif);
+  letter-spacing: 0.0052em;
+  color: rgb(60, 60, 67);
+  white-space: nowrap;
+  user-select: none;
+  isolation: isolate;
+  /* How far the focus reaches from the pointer. */
+  --reach: 43px;
+  /* The patch around the pointer, eased out to its edge as cos(πr), and everywhere else. */
+  --focused: radial-gradient(circle var(--reach) at var(--x) var(--y),
+    rgb(0 0 0 / var(--s)) 0%, rgb(0 0 0 / calc(var(--s) * 0.9619)) 12.5%,
+    rgb(0 0 0 / calc(var(--s) * 0.8536)) 25%, rgb(0 0 0 / calc(var(--s) * 0.6913)) 37.5%,
+    rgb(0 0 0 / calc(var(--s) * 0.5)) 50%, rgb(0 0 0 / calc(var(--s) * 0.3087)) 62.5%,
+    rgb(0 0 0 / calc(var(--s) * 0.1464)) 75%, rgb(0 0 0 / calc(var(--s) * 0.0381)) 87.5%,
+    rgb(0 0 0 / 0) 100%);
+  --unfocused: radial-gradient(circle var(--reach) at var(--x) var(--y),
+    rgb(0 0 0 / calc(1 - var(--s))) 0%, rgb(0 0 0 / calc(1 - var(--s) * 0.9619)) 12.5%,
+    rgb(0 0 0 / calc(1 - var(--s) * 0.8536)) 25%, rgb(0 0 0 / calc(1 - var(--s) * 0.6913)) 37.5%,
+    rgb(0 0 0 / calc(1 - var(--s) * 0.5)) 50%, rgb(0 0 0 / calc(1 - var(--s) * 0.3087)) 62.5%,
+    rgb(0 0 0 / calc(1 - var(--s) * 0.1464)) 75%, rgb(0 0 0 / calc(1 - var(--s) * 0.0381)) 87.5%,
+    rgb(0 0 0) 100%);
+  transition: --x 600ms var(--ease-out), --y 600ms var(--ease-out), --s 400ms ease;
+}
+/* The focus fades in after a moment, then glides after the pointer. */
+.name.pointing { --s: 1; transition: --x 600ms var(--ease-out), --y 600ms var(--ease-out), --s 500ms ease 150ms; }
+/* Where the pointer arrives, it appears in place. */
+.name.pointing.arriving { transition: --s 500ms ease 150ms; }
+/* Each drawing reaches past the letters so their blur isn't clipped by the mask. */
+.name-rest, .name-mist, .name-focus {
+  display: block;
+  margin: -14px;
+  padding: 14px;
+  /* Geist Serif ships one weight; smearing each letter sideways draws it semibold. */
+  text-shadow: -0.018em 0 0 currentColor, -0.012em 0 0 currentColor, -0.006em 0 0 currentColor,
+    0.006em 0 0 currentColor, 0.012em 0 0 currentColor, 0.018em 0 0 currentColor;
+}
+.name-rest { opacity: 0.4; --blur: 1.9px; -webkit-mask-image: var(--unfocused); mask-image: var(--unfocused); }
+.name-mist, .name-focus {
+  position: absolute;
+  inset: 0;
+  /* Added rather than laid over, so the drawings cross-fade without a pale seam. */
+  mix-blend-mode: plus-lighter;
+}
+.name-mist { display: none; }
+.name-focus { opacity: 0.5; --blur: 0.76px; -webkit-mask-image: var(--focused); mask-image: var(--focused); }
+.name-rest > span, .name-mist > span, .name-focus > span { display: inline-block; filter: blur(var(--blur)); }
+
+/* At rest, soft clouds of blur drift through the name. A third, mistier drawing shows through two
+   fields of cloud that slide past each other, one rolling sideways and one across it, so the
+   clouds swell, part and change shape rather than moving as one; the resting drawing gives way
+   wherever they are. The pointer's patch of focus clears both. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (mask-composite: exclude) {
+    /* Two tiling fields of fractal noise, the first stretched sideways like rolling waves. */
+    .name {
+      --clouds: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='160'%3E%3Cfilter id='f' x='0' y='0' width='1' height='1' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.0075 .015' numOctaves='3' seed='4' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2.4 0 0 0 -.6'/%3E%3C/filter%3E%3Crect width='320' height='160' filter='url(%23f)'/%3E%3C/svg%3E"),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='f' x='0' y='0' width='1' height='1' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.011 .011' numOctaves='2' seed='9' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2.4 0 0 0 -.6'/%3E%3C/filter%3E%3Crect width='260' height='260' filter='url(%23f)'/%3E%3C/svg%3E");
+    }
+    /* One loop is four passes of the first field and three of the second, 72 s and 96 s each. The
+       clouds move on 13 times a second, a third of a pixel at a time: smooth enough for something
+       this soft, at a fraction of the repainting. */
+    .name-rest, .name-mist {
+      mask-size: auto, auto, 320px 160px, 260px 260px;
+      animation: clouds 288s steps(3840) infinite;
+    }
+    /* Everywhere but the pointer, less where the clouds are: they are cut out of a solid layer. */
+    .name-rest {
+      --blur: 1.7px;
+      mask-image: var(--unfocused), linear-gradient(#000 0 0), var(--clouds);
+      mask-composite: intersect, exclude, intersect, add;
+    }
+    /* Everywhere but the pointer, where both fields of cloud are. The solid layer only keeps the
+       layers in step with the resting drawing's. */
+    .name-mist {
+      display: block;
+      opacity: 0.37;
+      --blur: 3.3px;
+      mask-image: var(--unfocused), linear-gradient(#000 0 0), var(--clouds);
+      mask-composite: intersect, intersect, intersect, add;
+    }
+  }
+}
+@keyframes clouds {
+  from { mask-position: 0 0, 0 0, 0 0, 0 0; }
+  to { mask-position: 0 0, 0 0, 1280px 0, -780px 780px; }
+}
+
+/* -- the page coming in ------------------------------------------------------------------------ */
+/* The name comes forward through fog, as it does each time the popover opens: letter by letter,
+   30 ms apart, it clears, fades up, grows from further back and rises into place, while a haze of
+   the page's own colour thins behind it. Then the rest rises in under it. Nothing shows until the
+   name's typeface has loaded, so the letters don't change shape halfway. */
+.js:not(.ready) main { visibility: hidden; }
+.name::after {
+  content: "";
+  position: absolute;
+  left: -20px;
+  bottom: -14px;
+  width: 280px;
+  height: 89px;
+  background: radial-gradient(ellipse 50% 50% at 45% 60%, rgb(246 246 244 / 0.95), rgb(246 246 244 / 0.6) 45%, rgb(246 246 244 / 0) 100%);
+  filter: blur(29px);
+  opacity: 0;
+  pointer-events: none;
+}
+.ready .name-rest > span, .ready .name-mist > span, .ready .name-focus > span {
+  animation:
+    name-rise 400ms cubic-bezier(0.33, 1, 0.68, 1) calc(130ms + var(--i) * 30ms) backwards,
+    name-near 550ms cubic-bezier(0.16, 1, 0.3, 1) calc(140ms + var(--i) * 30ms) backwards,
+    name-clear 550ms cubic-bezier(0.1, 0.9, 0.2, 1) calc(140ms + var(--i) * 30ms) backwards,
+    name-ink 290ms cubic-bezier(0.16, 1, 0.3, 1) calc(140ms + var(--i) * 30ms) backwards;
+}
+.ready .name::after { animation: name-haze 520ms cubic-bezier(0.45, 0, 0.55, 1) 220ms backwards; }
+.ready .words h1 { animation: rise-in 700ms var(--ease-out) 380ms backwards; }
+.ready .words p { animation: rise-in 700ms var(--ease-out) 470ms backwards; }
+.ready .get { animation: rise-in 700ms var(--ease-out) 560ms backwards; }
+.ready .req { animation: rise-in 700ms var(--ease-out) 610ms backwards; }
+@keyframes name-rise { from { translate: 0 10px; } }
+@keyframes name-near { from { scale: 0.889; } }
+@keyframes name-clear { from { filter: blur(29px); } }
+@keyframes name-ink { from { opacity: 0; } }
+@keyframes name-haze { from { opacity: 1; } to { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; translate: 0 10px; filter: blur(6px); } }
+@keyframes fade-in { from { opacity: 0; } }
+
+/* -- the sentence ------------------------------------------------------------------------------ */
+.words {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--unit) * 2);
+  font: 500 var(--size)/1.6 var(--sans);
+  letter-spacing: -0.014em;
+  /* The GitHub link's underline is drawn behind its text. */
+  isolation: isolate;
+}
+/* Each paragraph's own line spacing is trimmed off its top and bottom, so gaps run text to text. */
+.words h1, .words p { margin: calc(var(--unit) * -0.5) 0; font: inherit; text-wrap: pretty; }
+.words p { color: var(--muted); }
+.nowrap { white-space: nowrap; }
+
+.player {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.33em;
+  vertical-align: middle;
+  height: 1.5em;
+  margin-left: 0.3em;
+  padding: 0 0.5em 0 0.2em;
+  border-radius: 0.75em;
+  background: var(--fill);
+}
+.play {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.1em;
+  height: 1.1em;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #fff;
+  font: inherit;
+  transition: transform 160ms var(--ease-out);
+}
+.play:active { transform: scale(0.94); }
+.play svg { width: 0.46em; height: 0.46em; fill: currentColor; }
+.play .pause, .playing .play .resume { display: none; }
+.playing .play .pause { display: block; }
+.bars { display: inline-flex; align-items: center; gap: 0.06em; width: 3.6em; height: 0.8em; }
+.bars span {
+  flex: 1;
+  min-width: 0;
+  height: calc(var(--h, 0.06) * 0.72em);
+  border-radius: 1px;
+  background: var(--faint);
+  transition: height 420ms var(--ease-out);
+}
+.bars span.heard { background: var(--ink); }
+
+/* While the clip plays, a small line above the player says how to hear the original. */
+.hint {
+  position: absolute;
+  left: 0.2em;
+  bottom: calc(100% + 5px);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  font: 400 12px/16px var(--sans);
+  letter-spacing: 0;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity 200ms ease-out, transform 240ms var(--ease-out);
+}
+.hint.shown { opacity: 1; transform: none; pointer-events: auto; }
+.key {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border-radius: 4px;
+  border: 0.5px solid rgba(0, 0, 0, 0.14);
+  background: #fff;
+  box-shadow: 0 1.5px 0 rgba(0, 0, 0, 0.14);
+  color: var(--ink);
+  font: 11px/1 var(--sans);
+  touch-action: none;
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out, background-color 90ms ease-out;
+}
+.key[aria-pressed="true"] { background: #ececea; box-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.14); transform: translateY(1px); }
+
+/* "menu bar" opens the demo, which hangs below it as the popover hangs below Booth's icon. */
+.demo { position: relative; white-space: nowrap; }
+.demo-trigger {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-decoration: underline dotted rgba(60, 60, 67, 0.45);
+  text-decoration-thickness: 0.07em;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color 160ms ease-out;
+}
+.demo-trigger[aria-expanded="true"] { text-decoration-color: currentColor; }
+.demo-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 10;
+  display: block;
+  width: max-content;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(251, 251, 250, 0.96);
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06), inset 0 0.5px 0 rgba(255, 255, 255, 0.85);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(calc(-50% + var(--shift, 0px))) translateY(-4px) scale(0.97);
+  transform-origin: 50% 0;
+  transition: opacity 160ms var(--ease-out), transform 220ms var(--ease-out), visibility 0s linear 220ms;
+}
+.demo-panel.open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(calc(-50% + var(--shift, 0px)));
+  transition: opacity 160ms var(--ease-out), transform 220ms var(--ease-out), visibility 0s;
+}
+.demo-panel video {
+  display: block;
+  width: min(352px, calc(100vw - 56px));
+  height: auto;
+  aspect-ratio: 8 / 5;
+  border-radius: 8px;
+  background: url("media/demo-poster.jpg") center / cover;
+}
+
+/* GitHub's mark sits before "open source" over a dotted underline. On hover the mark turns
+   GitHub purple and tips over, the words darken, and a solid line draws in from the left. Both
+   lines are drawn under the text, so nothing in the sentence moves. */
+.gh { color: inherit; text-decoration: none; white-space: nowrap; transition: color 160ms ease-out; }
+.gh svg {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.24em;
+  vertical-align: -0.08em;
+  fill: currentColor;
+  transition: fill 160ms ease-out, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.gh .label { position: relative; }
+.gh .dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0.05em;
+  height: 0.08em;
+  background-image: radial-gradient(circle, currentColor 0.035em, transparent 0.042em);
+  background-size: 0.19em 0.08em;
+  background-repeat: repeat-x;
+  opacity: 0.7;
+  transition: opacity 180ms ease-out;
+}
+.gh .line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0.065em;
+  height: 0.055em;
+  border-radius: 0.03em;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 280ms var(--ease-out);
+}
+.gh:hover, .gh:focus-visible { color: var(--ink); }
+.gh:hover svg, .gh:focus-visible svg { fill: var(--github); transform: rotate(-12deg); }
+.gh:hover .dots, .gh:focus-visible .dots { opacity: 0; }
+.gh:hover .line, .gh:focus-visible .line { transform: scaleX(1); }
+
+/* -- install ----------------------------------------------------------------------------------- */
+.get { margin-top: calc(var(--unit) * 3); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px 0 12px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.download:hover { opacity: 0.88; }
+.download:active { transform: scale(0.97); }
+.download svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.brew { display: inline-flex; align-items: center; height: 34px; padding: 0 4px 0 12px; border-radius: 9px; background: var(--fill); }
+.brew code { font: 12px var(--mono); white-space: nowrap; }
+.copy {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: rgba(60, 60, 67, 0.76);
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+.copy:hover { background: var(--fill); color: var(--ink); }
+.copy svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.copy .done, .copied .copy .ready { display: none; }
+.copied .copy .done { display: block; stroke-width: 1.6; }
+.req { margin: calc(var(--unit) * 0.75) 0 0; font-size: 12px; line-height: 16px; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }
+  /* The letters still clear and fade up in turn, but neither come forward nor rise; the rest fades in. */
+  .ready .name-rest > span, .ready .name-mist > span, .ready .name-focus > span {
+    animation:
+      name-clear 550ms cubic-bezier(0.1, 0.9, 0.2, 1) calc(140ms + var(--i) * 30ms) backwards,
+      name-ink 290ms cubic-bezier(0.16, 1, 0.3, 1) calc(140ms + var(--i) * 30ms) backwards;
+  }
+  .ready .words h1, .ready .words p, .ready .get, .ready .req { animation-name: fade-in; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+<main>
+  <p class="name" id="name"><span class="sr">Booth</span><span class="name-rest" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span><span class="name-mist" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span><span class="name-focus" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span></p>
+  <div class="words">
+    <h1><span class="nowrap">Studio speech<span class="player" id="player"><span class="hint" id="hint" aria-hidden="true">Hold<button class="key" type="button" aria-label="Hold for the original" aria-pressed="false" tabindex="-1">⌥</button>for the original</span><button class="play" type="button" aria-label="Play the demo"><svg class="resume" viewBox="0 0 14 14" aria-hidden="true"><path d="M4.5 2.6 L11.5 7 L4.5 11.4 Z"/></svg><svg class="pause" viewBox="0 0 14 14" aria-hidden="true"><rect x="3" y="2.5" width="3" height="9" rx="1"/><rect x="8" y="2.5" width="3" height="9" rx="1"/></svg></button><span class="bars" aria-hidden="true"></span></span></span> for any video or recording, right from your&nbsp;<span class="demo" id="demo"><button class="demo-trigger" type="button" aria-expanded="false" aria-controls="demo-panel">menu bar</button><span class="demo-panel" id="demo-panel" role="dialog" aria-label="How Booth works"><video muted loop playsinline preload="none" poster="media/demo-poster.jpg" aria-label="A video file is dragged onto Booth's menu bar icon and into its drop zone; Booth works on it and shows it done."><source src="media/demo.mp4" type="video/mp4"></video></span></span>.</h1>
+    <!-- Point this at the GitHub repository once it exists. -->
+    <p>It’s free, <a class="gh" href="https://github.com/shrimbly/booth"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="label">open source<span class="dots" aria-hidden="true"></span><span class="line" aria-hidden="true"></span></span></a> and 100%&nbsp;local.</p>
+  </div>
+  <div class="get" id="get">
+    <!-- release.sh copies the latest image to downloads/Booth.dmg. Once releases live on GitHub,
+         point this at https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg -->
+    <a class="download" href="downloads/Booth.dmg" download><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 2.5v9M5 8l4 4 4-4M3 15.5h12"/></svg>Download for Mac</a>
+    <!-- Until Booth is in Homebrew's main cask repository, this needs the tap's name:
+         brew install --cask shrimbly/booth/booth -->
+    <span class="brew"><code id="brew">brew install --cask booth</code><button class="copy" type="button" aria-label="Copy install command"><svg class="ready" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="6" width="7.5" height="7.5" rx="1.6"/><path d="M10 6V4.1A1.6 1.6 0 0 0 8.4 2.5H4.1A1.6 1.6 0 0 0 2.5 4.1v4.3A1.6 1.6 0 0 0 4.1 10H6"/></svg><svg class="done" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5"/></svg></button></span>
+  </div>
+  <p class="req">macOS 14+ · Apple silicon</p>
+</main>
+</div>
+<script src="media/demo.js"></script>
+<script>
+(() => {
+  // -- coming in, once the name's typeface is ready -----------------------------------------------
+  const ready = () => document.documentElement.classList.add("ready");
+  if (document.fonts && document.fonts.load) {
+    Promise.race([document.fonts.load('56px "Geist Serif"'), new Promise((resolve) => setTimeout(resolve, 800))])
+      .then(ready, ready);
+  } else {
+    ready();
+  }
+
+  // -- the pointer on the name --------------------------------------------------------------------
+  const name = document.getElementById("name");
+  const drawing = name.querySelector(".name-rest");
+  const aim = (event) => {
+    const box = drawing.getBoundingClientRect();
+    name.style.setProperty("--x", `${event.clientX - box.left}px`);
+    name.style.setProperty("--y", `${event.clientY - box.top}px`);
+  };
+  name.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "touch") return;
+    name.classList.add("arriving");
+    aim(event);
+    name.classList.add("pointing");
+    requestAnimationFrame(() => requestAnimationFrame(() => name.classList.remove("arriving")));
+  });
+  name.addEventListener("pointermove", (event) => { if (event.pointerType !== "touch") aim(event); });
+  name.addEventListener("pointerleave", () => name.classList.remove("pointing", "arriving"));
+
+  // -- the player ---------------------------------------------------------------------------------
+  const player = document.getElementById("player");
+  const playButton = player.querySelector(".play");
+  const barsBox = player.querySelector(".bars");
+  const data = window.BOOTH_DEMO || { duration: 30, before: [], after: [] };
+  const BAR_COUNT = 32;
+  const FADE_MS = 90;
+
+  // Fewer, wider bars than the data has: the mean of each run.
+  const squeeze = (list) => Array.from({ length: BAR_COUNT }, (_, i) => {
+    if (!list.length) return 0.06;
+    const k = list.length / BAR_COUNT;
+    let sum = 0;
+    for (let j = Math.floor(i * k); j < Math.floor((i + 1) * k); j++) sum += list[j];
+    return sum / Math.max(1, Math.floor((i + 1) * k) - Math.floor(i * k));
+  });
+  const heights = { before: squeeze(data.before), after: squeeze(data.after) };
+  const bars = Array.from({ length: BAR_COUNT }, () => barsBox.appendChild(document.createElement("span")));
+
+  const tracks = { before: new Audio("media/before.m4a"), after: new Audio("media/after.m4a") };
+  for (const track of Object.values(tracks)) track.preload = "auto";
+  let held = false;        // ⌥, or the hint's key, is down
+  let playing = false;
+  let duration = data.duration;
+
+  // iOS ignores volume, so it switches by muting instead of fading.
+  const probe = new Audio();
+  probe.volume = 0.5;
+  const canFade = probe.volume === 0.5;
+
+  const audible = () => (held ? "before" : "after");
+
+  function drawBars() {
+    const list = heights[audible()];
+    bars.forEach((bar, i) => bar.style.setProperty("--h", list[i]));
+  }
+
+  let fade = 0;
+  function applyVersion(instant) {
+    const target = audible();
+    const other = target === "before" ? "after" : "before";
+    // Line the incoming track up with the one that was heard before raising it.
+    if (playing && Math.abs(tracks[target].currentTime - tracks[other].currentTime) > 0.03) {
+      tracks[target].currentTime = tracks[other].currentTime;
+    }
+    drawBars();
+    cancelAnimationFrame(fade);
+    if (!canFade || instant) {
+      tracks[target].muted = false;
+      tracks[other].muted = true;
+      tracks[target].volume = 1;
+      tracks[other].volume = 0;
+      return;
+    }
+    tracks[target].muted = false;
+    tracks[other].muted = false;
+    const from = { target: tracks[target].volume, other: tracks[other].volume };
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / FADE_MS);
+      tracks[target].volume = from.target + (1 - from.target) * t;
+      tracks[other].volume = from.other * (1 - t);
+      if (t < 1) fade = requestAnimationFrame(step);
+    };
+    fade = requestAnimationFrame(step);
+  }
+
+  tracks.after.addEventListener("loadedmetadata", () => {
+    if (Number.isFinite(tracks.after.duration)) duration = tracks.after.duration;
+  });
+
+  const position = () => tracks[audible()].currentTime;
+  function render() {
+    const heard = Math.floor((BAR_COUNT * position()) / duration);
+    bars.forEach((bar, i) => bar.classList.toggle("heard", i < heard));
+  }
+
+  let frame = 0;
+  function tick() {
+    // Keep the silent track within a few frames of the heard one.
+    const heard = tracks[audible()];
+    const silent = tracks[audible() === "before" ? "after" : "before"];
+    if (Math.abs(silent.currentTime - heard.currentTime) > 0.06) silent.currentTime = heard.currentTime;
+    render();
+    if (playing) frame = requestAnimationFrame(tick);
+  }
+
+  function seek(seconds) {
+    for (const track of Object.values(tracks)) track.currentTime = seconds;
+    render();
+  }
+
+  async function play() {
+    if (position() >= duration - 0.05) seek(0);
+    playing = true;
+    player.classList.add("playing");
+    playButton.setAttribute("aria-label", "Pause the demo");
+    applyVersion(true);
+    syncHint();
+    try {
+      await Promise.all(Object.values(tracks).map((track) => track.play()));
+    } catch {
+      pause();
+      return;
+    }
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    playing = false;
+    player.classList.remove("playing");
+    playButton.setAttribute("aria-label", "Play the demo");
+    for (const track of Object.values(tracks)) track.pause();
+    cancelAnimationFrame(frame);
+    render();
+    syncHint();
+  }
+
+  playButton.addEventListener("click", () => (playing ? pause() : play()));
+  tracks.after.addEventListener("ended", () => { pause(); seek(0); });
+
+  // -- hold ⌥ for the original ---------------------------------------------------------------------
+  // The hint shows while the clip plays, or while ⌥ is held, and waits a moment after both stop so
+  // a quick pause doesn't make it flicker.
+  const hint = document.getElementById("hint");
+  const key = hint.querySelector(".key");
+  const HINT_LINGER_MS = 700;
+  let hintTimer = 0;
+  function syncHint() {
+    clearTimeout(hintTimer);
+    const show = (on) => {
+      hint.classList.toggle("shown", on);
+      hint.setAttribute("aria-hidden", String(!on));
+      key.tabIndex = on ? 0 : -1;
+    };
+    if (playing || held) show(true);
+    else hintTimer = setTimeout(() => show(false), HINT_LINGER_MS);
+  }
+
+  function setHeld(down) {
+    if (held === down) return;
+    held = down;
+    key.setAttribute("aria-pressed", String(down));
+    applyVersion(false);
+    render();
+    syncHint();
+  }
+  window.addEventListener("keydown", (event) => { if (event.key === "Alt") { event.preventDefault(); setHeld(true); } });
+  window.addEventListener("keyup", (event) => { if (event.key === "Alt") setHeld(false); });
+  window.addEventListener("blur", () => setHeld(false));
+  key.addEventListener("pointerdown", (event) => { event.preventDefault(); setHeld(true); });
+  for (const type of ["pointerup", "pointerleave", "pointercancel"]) key.addEventListener(type, () => setHeld(false));
+  key.addEventListener("keydown", (event) => {
+    if (event.key === " " || event.key === "Enter") { event.preventDefault(); setHeld(true); }
+  });
+  key.addEventListener("keyup", () => setHeld(false));
+
+  drawBars();
+  render();
+
+  // -- the demo under "menu bar" -------------------------------------------------------------------
+  // Opens on hover or focus and on click or tap, and plays from the top each time it opens.
+  const demo = document.getElementById("demo");
+  const trigger = demo.querySelector(".demo-trigger");
+  const panel = document.getElementById("demo-panel");
+  const video = panel.querySelector("video");
+  const isOpen = () => panel.classList.contains("open");
+  let closer = 0;
+  let openedByClick = false;
+
+  // Keep the panel on screen: shift it sideways when centring it under the words would cross an edge.
+  function place() {
+    const margin = 12;
+    const box = demo.getBoundingClientRect();
+    const centre = box.left + box.width / 2;
+    const half = panel.offsetWidth / 2;
+    let shift = 0;
+    if (centre - half < margin) shift = margin - (centre - half);
+    else if (centre + half > window.innerWidth - margin) shift = window.innerWidth - margin - (centre + half);
+    panel.style.setProperty("--shift", `${Math.round(shift)}px`);
+  }
+
+  function open(byClick) {
+    clearTimeout(closer);
+    openedByClick = byClick;
+    if (isOpen()) return;
+    place();
+    panel.classList.add("open");
+    trigger.setAttribute("aria-expanded", "true");
+    try { video.currentTime = 0; } catch {}
+    video.play().catch(() => {});
+  }
+  function close() {
+    clearTimeout(closer);
+    if (!isOpen()) return;
+    panel.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
+    video.pause();
+  }
+  // A short grace period lets the pointer cross the gap between the words and the panel.
+  const closeSoon = () => { clearTimeout(closer); closer = setTimeout(close, 140); };
+
+  demo.addEventListener("pointerenter", (event) => { if (event.pointerType !== "touch") open(false); });
+  demo.addEventListener("pointerleave", (event) => { if (event.pointerType !== "touch") closeSoon(); });
+  trigger.addEventListener("click", () => (isOpen() && openedByClick ? close() : open(true)));
+  trigger.addEventListener("focus", () => open(false));
+  trigger.addEventListener("blur", closeSoon);
+  demo.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+  document.addEventListener("pointerdown", (event) => { if (!demo.contains(event.target)) close(); });
+  window.addEventListener("resize", () => { if (isOpen()) place(); });
+
+  // -- copy the install command -------------------------------------------------------------------
+  const get = document.getElementById("get");
+  const copyButton = get.querySelector(".copy");
+  let copiedTimer = 0;
+  copyButton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById("brew").textContent);
+    } catch {
+      return;
+    }
+    get.classList.add("copied");
+    copyButton.setAttribute("aria-label", "Copied");
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => {
+      get.classList.remove("copied");
+      copyButton.setAttribute("aria-label", "Copy install command");
+    }, 1600);
+  });
+})();
+</script>
+</body>
+</html>

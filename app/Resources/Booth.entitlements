@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Booth runs with the hardened runtime, which notarization requires. Under it, sending Apple Events
+  needs this entitlement as well as NSAppleEventsUsageDescription: ⌃⌥E asks Finder for its selection.
+  The engine runs as separate processes, so it needs nothing here.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

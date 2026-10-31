@@ -1,0 +1,72 @@
+#!/bin/sh
+# booth, the command line half of Booth. It runs the engine Booth installs in
+# ~/Library/Application Support/Booth/engine, and installs or updates that engine first, the way
+# Booth's first run does, when it is missing or older than this copy of Booth.
+#
+# Homebrew links this file onto your PATH. With Booth from the DMG, link it yourself:
+#   ln -s /Applications/Booth.app/Contents/Resources/bin/booth /usr/local/bin/booth
+set -eu
+
+self=$(realpath "$0")
+resources=$(dirname "$(dirname "$self")")
+bundled=$resources/engine
+engine_dir=$HOME/Library/Application\ Support/Booth/engine
+engine=$engine_dir/.venv/bin/booth
+# The engine version the last successful install was for. Booth writes it too. It is emptied
+# before an install changes anything, so one that fails or is interrupted is redone next time.
+stamp=$engine_dir/.booth-engine-version
+
+uv=$resources/bin/uv
+[ -x "$uv" ] || uv=$(command -v uv || true)
+
+# The engine's own Python must not pick up someone else's interpreter or packages.
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV __PYVENV_LAUNCHER__ PYTHONSTARTUP
+for dir in /opt/homebrew/bin /usr/local/bin; do
+	case ":$PATH:" in *":$dir:"*) ;; *) [ -d "$dir" ] && PATH=$PATH:$dir ;; esac
+done
+export PATH
+[ -z "$uv" ] || export BOOTH_ENGINE_UV="$uv"
+
+# The engine build: the BUILD line build-app.sh writes (version plus a hash of the engine's
+# files), otherwise the version in __init__.py.
+version_of() {
+	if [ -s "$1/BUILD" ]; then
+		head -n 1 "$1/BUILD"
+	else
+		sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$1/src/booth/__init__.py" 2>/dev/null || true
+	fi
+}
+
+wanted=$(version_of "$bundled")
+if [ -f "$stamp" ]; then
+	installed=$(cat "$stamp" 2>/dev/null || true)
+else
+	installed=$(version_of "$engine_dir") # installed before the stamp existed
+fi
+
+if [ ! -x "$engine" ] || [ "$installed" != "$wanted" ]; then
+	# Booth sets this for the engines it starts: it installs and updates the engine itself.
+	if [ -n "${BOOTH_NO_INSTALL:-}" ]; then
+		echo "booth: the engine is missing or out of date, and BOOTH_NO_INSTALL is set. Open Booth to install it." >&2
+		exit 1
+	fi
+	if [ ! -d "$bundled/src/booth" ]; then
+		echo "booth: Booth's engine files are missing. Download Booth again." >&2
+		exit 1
+	fi
+	if [ -z "$uv" ]; then
+		echo "booth: installing the engine needs uv. Install it with: brew install uv" >&2
+		exit 1
+	fi
+	echo "Installing Booth's engine. This happens once and takes a minute or two." >&2
+	mkdir -p "$engine_dir"
+	: >"$stamp"
+	for item in src pyproject.toml uv.lock README.md BUILD; do
+		rm -rf "${engine_dir:?}/$item"
+		[ ! -e "$bundled/$item" ] || cp -R "$bundled/$item" "$engine_dir/$item"
+	done
+	(cd "$engine_dir" && "$uv" sync --frozen --python 3.11 --quiet) >&2
+	printf '%s\n' "$wanted" >"$stamp"
+fi
+
+exec "$engine" "$@"

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "booth"
+version = "0.1.0"
+description = "Local Adobe Podcast-style speech enhancement: isolate the voice, clean it, remix with speech/background/music controls."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+dependencies = [
+  # Pinned as a known-good stack: deepfilternet 0.5.6 needs numpy<2;
+  # torch/torchaudio 2.2.2 predate the torchaudio backend removals it relies on.
+  "numpy>=1.24,<2.0",
+  "scipy>=1.11",
+  "torch==2.2.2",
+  "torchaudio==2.2.2",
+  "deepfilternet==0.5.6",
+  "demucs>=4.1.0,<5",
+  "soundfile>=0.12",
+  "rich>=13",
+  "onnxruntime>=1.16",   # DNSMOS perceptual scoring
+]
+
+[project.scripts]
+booth = "booth.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/booth"]

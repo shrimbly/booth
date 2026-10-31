@@ -1,0 +1,34 @@
+# Homebrew cask for Booth. app/scripts/release.sh fills in the @…@ values and writes the result to
+# dist/booth.rb; publish it as Casks/booth.rb in a tap repository named homebrew-booth, then:
+#   brew install --cask shrimbly/booth/booth
+cask "booth" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/@REPOSITORY@/releases/download/v#{version}/Booth-#{version}.dmg"
+  name "Booth"
+  desc "Studio-quality voice for your recordings, enhanced on your Mac"
+  homepage "@HOMEPAGE@"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on arch: :arm64
+  depends_on macos: ">= :sonoma"
+  depends_on formula: "ffmpeg"
+
+  app "Booth.app"
+  binary "#{appdir}/Booth.app/Contents/Resources/bin/booth"
+
+  uninstall quit: "studio.booth.Booth"
+
+  zap trash: [
+    "~/.cache/booth",
+    "~/Library/Application Support/Booth",
+    "~/Library/Caches/Booth",
+    "~/Library/Logs/Booth",
+    "~/Library/Preferences/studio.booth.Booth.plist",
+  ]
+end
