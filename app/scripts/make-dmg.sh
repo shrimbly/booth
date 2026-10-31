@@ -15,7 +15,11 @@ usage: make-dmg.sh [--app PATH] [--out DIR] [--sign IDENTITY] [--notarize PROFIL
   --out DIR           where the image goes          default: app/build
   --sign IDENTITY     sign the image (a Developer ID Application identity)
   --notarize PROFILE  notarize and staple the image, with credentials saved once by
-                      xcrun notarytool store-credentials PROFILE --apple-id … --team-id …
+                      xcrun notarytool store-credentials PROFILE --key AuthKey_….p8 --key-id … --issuer …
+                      (or --apple-id … --team-id …)
+
+environment:
+  BOOTH_NOTARY_KEYCHAIN  the keychain that holds PROFILE    default: the login keychain
 
 The image is named Booth-<version>.dmg, from the app's CFBundleShortVersionString.
 EOF
@@ -92,9 +96,20 @@ fi
 
 if [[ -n $notary_profile ]]; then
 	log "Notarizing (this usually takes a few minutes)"
-	xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --wait >&2
+	notary=(--keychain-profile "$notary_profile")
+	[[ -z ${BOOTH_NOTARY_KEYCHAIN:-} ]] || notary+=(--keychain "$BOOTH_NOTARY_KEYCHAIN")
+	xcrun notarytool submit "$dmg" "${notary[@]}" --wait --output-format json >"$staging/notary.json"
+	status=$(plutil -extract status raw -o - "$staging/notary.json" 2>/dev/null || true)
+	if [[ $status != Accepted ]]; then
+		# The log names each file Apple objected to, and why.
+		submission=$(plutil -extract id raw -o - "$staging/notary.json" 2>/dev/null || true)
+		[[ -z $submission ]] || xcrun notarytool log "$submission" "${notary[@]}" >&2 || true
+		die "the notary service answered ${status:-nothing}; its log is above"
+	fi
 	xcrun stapler staple "$dmg" >&2
 	spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+	# The app was notarized with the image; Gatekeeper finds its ticket online.
+	spctl --assess --type execute --verbose=2 "$app"
 fi
 
 hdiutil verify "$dmg" >/dev/null 2>&1 || die "hdiutil can't verify $dmg"

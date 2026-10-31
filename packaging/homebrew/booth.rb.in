@@ -1,5 +1,5 @@
 # Homebrew cask for Booth. app/scripts/release.sh fills in the @…@ values and writes the result to
-# dist/booth.rb; publish it as Casks/booth.rb in a tap repository named homebrew-booth, then:
+# dist/booth.rb; with --publish it commits that as Casks/booth.rb to the tap (BOOTH_TAP), so:
 #   brew install --cask shrimbly/booth/booth
 cask "booth" do
   version "@VERSION@"

@@ -9,4 +9,3 @@ test-output/
 checkpoints/
 .claude/settings.local.json
 .build/
-site/downloads/

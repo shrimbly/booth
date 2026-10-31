@@ -1,0 +1,167 @@
+# Builds Booth on GitHub's Apple silicon runners, signs it with the Developer ID, notarizes it, and,
+# for a tag, publishes it. It runs app/scripts/release.sh, the same script a release by hand uses.
+#
+# Pushing a tag v<version> (matching pyproject.toml) uploads the disk image to the GitHub release of
+# that tag and commits the cask to the Homebrew tap. A release already published by hand with
+# `release.sh --publish` is left alone. Running the workflow by hand from the Actions tab builds,
+# signs and notarizes without publishing, and keeps the image as a workflow artifact.
+#
+# Secrets (Settings › Secrets and variables › Actions), set with app/scripts/set-release-secrets.sh:
+#   MAC_CERTIFICATE_P12_BASE64  the Developer ID Application identity, as a base64 .p12
+#   MAC_CERTIFICATE_PASSWORD    the .p12's password
+#   APPLE_API_KEY_P8            the App Store Connect API key (.p8) the notary service accepts
+#   APPLE_API_KEY_ID            its key ID
+#   APPLE_API_ISSUER            its issuer ID
+#   HOMEBREW_TAP_DEPLOY_KEY     an SSH key that can push to the tap (only for a tag)
+# GITHUB_TOKEN uploads to the release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.version.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Version and tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
+          echo "Booth $version"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::The tag $GITHUB_REF_NAME doesn't match pyproject.toml's version $version"
+              exit 1
+            fi
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null |
+              grep -qx "Booth-$version.dmg"; then
+              echo "::notice::$GITHUB_REF_NAME was already published by hand; nothing to build"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+  release:
+    name: Build, sign and notarize
+    needs: check
+    if: ${{ needs.check.outputs.skip != 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      PUBLISH: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # build-app.sh numbers the build by the commit count.
+          fetch-depth: 0
+      # The uv that Booth.app bundles, so pinned.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: '0.11.16'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Toolchain
+        run: |
+          swift --version
+          uv --version
+      # For release.sh's engine smoke checks.
+      - name: Engine
+        run: uv sync --frozen
+
+      - name: Signing keychain
+        env:
+          MAC_CERTIFICATE_P12_BASE64: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          for name in MAC_CERTIFICATE_P12_BASE64 MAC_CERTIFICATE_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The secret $name isn't set; see app/scripts/set-release-secrets.sh"
+              exit 1
+            fi
+          done
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -hex 24)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MAC_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -f pkcs12 -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/identity.p12"
+          # Lets codesign use the key without a dialog nobody is there to answer.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          searched=()
+          while IFS= read -r line; do searched+=("$(sed -e 's/^ *"//' -e 's/"$//' <<<"$line")"); done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${searched[@]}"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')
+          if [ -z "$identity" ]; then
+            security find-identity -p codesigning "$keychain"
+            echo "::error::MAC_CERTIFICATE_P12_BASE64 holds no valid Developer ID Application identity"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool store-credentials booth --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --keychain "$keychain"
+          rm "$RUNNER_TEMP/AuthKey.p8"
+          echo "BOOTH_NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Tap access
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "::error::The secret HOMEBREW_TAP_DEPLOY_KEY isn't set; see app/scripts/set-release-secrets.sh --tap-key"
+            exit 1
+          fi
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$RUNNER_TEMP/tap_key"
+          chmod 600 "$RUNNER_TEMP/tap_key"
+          tap=$(sed -n 's/^BOOTH_TAP=//p' packaging/release.env)
+          echo "BOOTH_TAP_REMOTE=git@github.com:$tap.git" >> "$GITHUB_ENV"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/tap_key -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+          # The tap's commit is made as this repository's author.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Build, sign, notarize${{ github.event_name == 'push' && ' and publish' || '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--sign "$SIGN_IDENTITY" --notarize booth)
+          if [ "$PUBLISH" = true ]; then args+=(--publish); fi
+          app/scripts/release.sh "${args[@]}"
+
+      - name: Keep the image
+        uses: actions/upload-artifact@v7
+        with:
+          name: Booth
+          if-no-files-found: error
+          path: |
+            dist/Booth-*.dmg
+            dist/SHA256SUMS
+            dist/booth.rb
+
+      - name: Remove the keychain
+        if: ${{ always() }}
+        run: |
+          [ ! -f "$RUNNER_TEMP/tap_key" ] || rm "$RUNNER_TEMP/tap_key"
+          [ ! -f "$RUNNER_TEMP/signing.keychain-db" ] || security delete-keychain "$RUNNER_TEMP/signing.keychain-db"

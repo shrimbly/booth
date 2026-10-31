@@ -37,6 +37,7 @@ app/scripts/build-app.sh --sign "Developer ID Application: Your Name (TEAMID)"  
 app/scripts/make-signing-identity.sh  # once: a local identity, so macOS stops asking after rebuilds
 app/scripts/make-dmg.sh               # package app/build/Booth.app as Booth-<version>.dmg
 app/scripts/release.sh                # tests, a --dist build and the image, into dist/
+app/scripts/set-release-secrets.sh    # the release workflow's signing and notarization secrets
 ```
 
 Releasing is described in the [root README](../README.md#build-and-release).
@@ -343,8 +344,8 @@ app/
   Tests/                     Swift Testing: BoothCoreTests (pure logic), BoothTests (AppModel)
   Resources/                 Info.plist template, Booth.entitlements, Fonts/ (Geist Serif + OFL),
                              bin/booth (the command line shim bundled in the app)
-  scripts/                   build-app.sh, make-dmg.sh, release.sh, make-icon.swift,
-                             make-signing-identity.sh
+  scripts/                   build-app.sh, make-dmg.sh, release.sh, set-release-secrets.sh,
+                             make-icon.swift, make-signing-identity.sh
 ```
 
 `AppModel` is where everything connects. The UI reads its state and calls its intents. The shell

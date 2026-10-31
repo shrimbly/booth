@@ -32,8 +32,8 @@ $ booth interview.mp4 podcast.wav
 
 ### Download
 
-Download `Booth.dmg` from the website (or the latest release), open it, and drag Booth to
-Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
+Download `Booth.dmg` from the website (or the [latest release](https://github.com/shrimbly/booth/releases/latest)),
+open it, and drag Booth to Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
 
 The first time, Booth sets up its engine and downloads the voice models: about 1.1 GB, once. If
 you don't have ffmpeg, install it with [Homebrew](https://brew.sh): `brew install ffmpeg`.
@@ -47,14 +47,12 @@ ln -s /Applications/Booth.app/Contents/Resources/bin/booth /usr/local/bin/booth
 ### Homebrew
 
 ```bash
-brew install --cask booth
+brew install shrimbly/booth/booth
 ```
 
-This installs Booth, puts `booth` on your `PATH`, and installs ffmpeg. `brew upgrade` keeps
-both up to date, and `brew uninstall --cask --zap booth` also removes the models and settings.
-
-(Until the cask is in Homebrew's main repository, use the tap's full name:
-`brew install --cask shrimbly/booth/booth`.)
+This installs Booth from its [tap](https://github.com/shrimbly/homebrew-booth), puts `booth` on
+your `PATH`, and installs ffmpeg. `brew upgrade` keeps both up to date, and
+`brew uninstall --cask --zap booth` also removes the models and settings.
 
 ### Command line only
 
@@ -191,38 +189,77 @@ each step is there, the calibration of the other engines, and the benchmark.
 |---|---|
 | `app/scripts/build-app.sh` | Builds `app/build/Booth.app`. Add `--dist` for a build meant for other Macs, `--sign IDENTITY` to sign with a Developer ID. |
 | `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`; `--sign` and `--notarize` sign and notarize the image. |
-| `app/scripts/release.sh` | Runs the tests, then builds, packages and writes everything a release publishes to `dist/`. |
+| `app/scripts/release.sh` | Runs the tests, then builds, signs, notarizes and packages a release into `dist/`. `--publish` uploads it to GitHub and updates the Homebrew tap. |
+| `app/scripts/set-release-secrets.sh` | Puts the signing certificate, the notary key and the tap's deploy key into the secrets the release workflow uses. |
 | `site/tools/make-demo.py` | Rebuilds the website's before/after demo from two recordings. |
 | `site/tools/make-demo-video.sh` | Renders the website's demo video from Booth's real popover views. |
 
 The version comes from `pyproject.toml` (with `__version__` in `src/booth/__init__.py` to
 match); the build stamps it into Booth's `Info.plist`.
 
-To make a release:
+### Make a release
 
-1. Set `version` in `pyproject.toml` and `__version__` in `src/booth/__init__.py`.
-2. Fill in `packaging/release.env` with the GitHub repository that hosts the releases.
-3. Run `app/scripts/release.sh --sign "Developer ID Application: Your Name (TEAMID)" --notarize PROFILE`.
-   For notarization, first store your credentials once with
-   `xcrun notarytool store-credentials PROFILE --apple-id you@example.com --team-id TEAMID`.
-   Without `--sign`, `release.sh` makes an unsigned test image that Gatekeeper blocks on other Macs.
-4. Upload `dist/Booth-<version>.dmg` and `dist/Booth.dmg` to a GitHub release tagged
-   `v<version>`, and commit `dist/booth.rb` as `Casks/booth.rb` in the `homebrew-booth` tap.
-5. Deploy `site/` to any static host. Its download button points at `downloads/Booth.dmg`, which
-   `release.sh` fills in; once releases are on GitHub, point it at
-   `https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg` instead.
+1. Set `version` in `pyproject.toml` and `__version__` in `src/booth/__init__.py`, and commit.
+2. Tag the commit `v<version>` and push both:
+
+   ```bash
+   git tag v0.2.0 && git push origin main v0.2.0
+   ```
+
+The tag starts the **Release** workflow (`.github/workflows/release.yml`). On a GitHub Apple
+silicon runner it runs the tests, builds Booth, signs it with the Developer ID, and notarizes and
+staples the disk image. Then it uploads `Booth-<version>.dmg`, `Booth.dmg` and `SHA256SUMS` to the
+GitHub release `v<version>`, and commits the new cask to
+[shrimbly/homebrew-booth](https://github.com/shrimbly/homebrew-booth). `Booth.dmg` is the same
+image under a name that doesn't change, for the website's download link. To try the workflow
+without releasing anything, run it from the Actions tab: it builds, signs and notarizes, and keeps
+the image as a workflow artifact.
+
+The same release can be made on your Mac, if the workflow can't run:
+
+```bash
+app/scripts/release.sh --sign "Developer ID Application" --notarize booth --publish
+```
+
+`--publish` needs a clean checkout whose commit is on GitHub. It creates the release and its tag at
+that commit if they don't exist yet, publishes the release once the images are up, and then
+updates the tap. The workflow that the new tag starts sees the release is already published and
+stops there. `booth` is a notarytool profile, saved once with an
+[App Store Connect API key](https://appstoreconnect.apple.com/access/integrations/api):
+
+```bash
+xcrun notarytool store-credentials booth --key AuthKey_<KEY ID>.p8 --key-id <KEY ID> --issuer <ISSUER ID>
+```
+
+Without `--sign`, `release.sh` makes an unsigned test image that Gatekeeper blocks on other Macs.
+
+### Signing
 
 Booth is signed with the hardened runtime. `--dist` builds don't point at this checkout's engine,
 and they carry no file paths from the Mac that built them. On first run they install their own in
 `~/Library/Application Support/Booth/engine` with the bundled `uv`, and they update it the first
 time a newer Booth starts.
 
+The workflow signs and notarizes with six repository secrets. `set-release-secrets.sh` checks each
+one and sets it:
+
+```bash
+app/scripts/set-release-secrets.sh --identity "Developer ID Application" \
+  --api-key AuthKey_<KEY ID>.p8 --issuer <ISSUER ID> --tap-key
+```
+
+`--identity` exports the certificate and its private key from your keychain as a `.p12` with a new
+random password; macOS asks for your login password first. `--api-key` is the key notarization
+uses. `--tap-key` makes the SSH key that lets the workflow push to the tap, and adds it to the tap
+as a deploy key. Each works on its own, so after renewing the certificate, run just `--identity`.
+
 ### Website
 
 `site/` is a single static page: one sentence with a player for a 30-second before/after clip
 (hold ⌥ to hear the original) and a short video of Booth at work behind "menu bar". To try it,
-open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. To replace the
-before/after clip:
+open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. It deploys to
+any static host as it is: the download button links to `Booth.dmg` on the latest GitHub release.
+To replace the before/after clip:
 
 ```bash
 python3 site/tools/make-demo.py original.wav enhanced.wav --start 12 --length 30
