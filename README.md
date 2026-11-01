@@ -200,7 +200,7 @@ each step is there, the calibration of the other engines, and the benchmark.
 | `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`, in the window `packaging/dmg` lays out (dmgbuild, run through uv); `--sign` and `--notarize` sign and notarize the image. |
 | `app/scripts/release.sh` | Runs the tests, then builds, signs, notarizes and packages a release into `dist/`. `--publish` uploads it to GitHub and updates the Homebrew tap. |
 | `app/scripts/set-release-secrets.sh` | Puts the signing certificate, the notary key and the tap's deploy key into the secrets the release workflow uses. |
-| `site/tools/make-demo.py` | Rebuilds the website's before/after demo from two recordings. |
+| `site/tools/make-demo-reel.py` | Cuts the website's demo reel (the picture, both sound tracks and the timeline's marks) from recordings Booth has enhanced. |
 | `site/tools/make-demo-video.sh` | Renders the website's demo video from Booth's real popover views. |
 
 The version comes from `pyproject.toml` (with `__version__` in `src/booth/__init__.py` to
@@ -264,17 +264,23 @@ as a deploy key. Each works on its own, so after renewing the certificate, run j
 
 ### Website
 
-`site/` is a single static page: one sentence with a player for a 30-second before/after clip
-(hold ⌥ to hear the original) and a short video of Booth at work behind "menu bar". To try it,
-open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. Vercel deploys
+`site/` is a single static page: one sentence whose ▶ opens a 30-second reel of real recordings
+(the picture over the original's and Booth's waveforms; hold ⌥ to hear the original, and each
+breath, click or background noise Booth removed is marked as it passes), and a short video of
+Booth at work behind "menu bar". To try it, serve the folder with a server that answers range
+requests, which the reel's video needs to seek (`npx http-server site`, say). Vercel deploys
 it to [getbooth.xyz](https://getbooth.xyz) from every push to `main` (the project's
 root directory is `site/`; `site/.vercelignore` keeps `tools/` off the web). The download button
 links to `Booth.dmg` on the latest GitHub release. The link-preview card, `site/assets/og.png`, is
 `site/tools/og-card.html` rendered by Chrome; the command is at the top of that file.
-To replace the before/after clip:
+The reel is cut from the author's own recordings, which stay out of the repository; its
+sections are listed in `site/tools/make-demo-reel.py`. Enhance each recording keeping the stems,
+then survey it for sections where Booth fixed several things, and build:
 
 ```bash
-python3 site/tools/make-demo.py original.wav enhanced.wav --start 12 --length 30
+.venv/bin/booth enhance talk.mp4 --audio-only --keep-stems runs/talk-stems -o runs/talk-booth.wav
+.venv/bin/python site/tools/make-demo-reel.py survey runs talk talk.mp4
+.venv/bin/python site/tools/make-demo-reel.py build runs
 ```
 
 The video is drawn by Booth itself, from its real popover views, so re-render it after the UI

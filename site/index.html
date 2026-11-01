@@ -64,7 +64,7 @@ button { cursor: pointer; }
   /* More room below than above lifts the text a little above the middle. */
   padding: 48px clamp(20px, 8vw, 128px) 96px;
 }
-main { width: 100%; max-width: 640px; }
+main { width: 100%; max-width: 640px; transition: transform 700ms var(--ease-out); }
 
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -83,7 +83,9 @@ main { width: 100%; max-width: 640px; }
   width: fit-content;
   margin: 0 0 calc(var(--unit) * 1.5);
   font: 400 56px/0.8 var(--serif);
-  letter-spacing: 0.0052em;
+  /* -0.05em, as on the link-preview card, opened by most of the smear below (0.7 × 0.036em) so the
+     spacing holds, as in the app. */
+  letter-spacing: -0.0248em;
   color: rgb(60, 60, 67);
   white-space: nowrap;
   user-select: none;
@@ -118,7 +120,7 @@ main { width: 100%; max-width: 640px; }
   text-shadow: -0.018em 0 0 currentColor, -0.012em 0 0 currentColor, -0.006em 0 0 currentColor,
     0.006em 0 0 currentColor, 0.012em 0 0 currentColor, 0.018em 0 0 currentColor;
 }
-.name-rest { opacity: 0.4; --blur: 1.9px; -webkit-mask-image: var(--unfocused); mask-image: var(--unfocused); }
+.name-rest { opacity: 0.4; --blur: 1.3px; -webkit-mask-image: var(--unfocused); mask-image: var(--unfocused); }
 .name-mist, .name-focus {
   position: absolute;
   inset: 0;
@@ -126,7 +128,7 @@ main { width: 100%; max-width: 640px; }
   mix-blend-mode: plus-lighter;
 }
 .name-mist { display: none; }
-.name-focus { opacity: 0.5; --blur: 0.76px; -webkit-mask-image: var(--focused); mask-image: var(--focused); }
+.name-focus { opacity: 0.5; --blur: 0.5px; -webkit-mask-image: var(--focused); mask-image: var(--focused); }
 .name-rest > span, .name-mist > span, .name-focus > span { display: inline-block; filter: blur(var(--blur)); }
 
 /* At rest, soft clouds of blur drift through the name. A third, mistier drawing shows through two
@@ -149,7 +151,7 @@ main { width: 100%; max-width: 640px; }
     }
     /* Everywhere but the pointer, less where the clouds are: they are cut out of a solid layer. */
     .name-rest {
-      --blur: 1.7px;
+      --blur: 1.15px;
       mask-image: var(--unfocused), linear-gradient(#000 0 0), var(--clouds);
       mask-composite: intersect, exclude, intersect, add;
     }
@@ -158,7 +160,7 @@ main { width: 100%; max-width: 640px; }
     .name-mist {
       display: block;
       opacity: 0.37;
-      --blur: 3.3px;
+      --blur: 2.25px;
       mask-image: var(--unfocused), linear-gradient(#000 0 0), var(--clouds);
       mask-composite: intersect, intersect, intersect, add;
     }
@@ -295,6 +297,164 @@ main { width: 100%; max-width: 640px; }
   transition: transform 90ms ease-out, box-shadow 90ms ease-out, background-color 90ms ease-out;
 }
 .key[aria-pressed="true"] { background: #ececea; box-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.14); transform: translateY(1px); }
+
+/* -- the reel: sections of real recordings, before and after, opened by ▶ ------------------------ */
+/* It drops down over the page from just under the line with ▶ (script sets --reel-top), as the
+   demo under "menu bar" does, and over that demo, so nothing moves. The card reaches just past the column, so the
+   picture lines up with the text. */
+.headline { position: relative; }
+.reel {
+  position: absolute;
+  top: var(--reel-top, calc(100% + var(--unit)));
+  left: -9px;
+  right: -9px;
+  z-index: 11;                    /* over the demo under "menu bar" too */
+  font: 400 13px/1.4 var(--sans);
+  letter-spacing: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px) scale(0.985);
+  transform-origin: 50% 0;
+  transition: opacity 180ms var(--ease-out), transform 280ms var(--ease-out), visibility 0s linear 280ms;
+}
+.reel[hidden] { display: none; }
+.reel.open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 180ms var(--ease-out), transform 280ms var(--ease-out), visibility 0s;
+}
+.reel-card {
+  padding: 8px 8px 12px;
+  border-radius: 14px;
+  background: rgba(251, 251, 250, 0.94);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06), inset 0 0.5px 0 rgba(255, 255, 255, 0.85);
+}
+/* A light disc on the dark picture, so the way out is easy to find. */
+.reel-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+  transition: background-color 160ms ease-out, transform 160ms var(--ease-out);
+}
+.reel-close:hover { background: #fff; transform: scale(1.06); }
+.reel-close:active { transform: scale(0.94); }
+.reel-close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+@media (max-width: 520px) {
+  .reel-close { top: 8px; right: 8px; width: 30px; height: 30px; }
+  .reel-close svg { width: 11px; height: 11px; }
+}
+.stage { position: relative; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: #0d0c11; }
+.stage video { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* Hold for the original: the way into the comparison, so it sits on the picture, bottom centre. */
+.hold {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 14px 6px 6px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.52);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22), inset 0 0.5px 0 rgba(255, 255, 255, 0.12);
+  font: 500 14px/18px var(--sans);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  transition: background-color 160ms ease-out, transform 160ms var(--ease-out);
+}
+.hold:hover { background: rgba(0, 0, 0, 0.62); }
+.hold kbd {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  font: 500 15px/1 var(--sans);
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out, background-color 90ms ease-out;
+}
+.hold[aria-pressed="true"] { background: rgba(0, 0, 0, 0.7); transform: translateX(-50%) scale(0.98); }
+.hold[aria-pressed="true"] kbd { background: #e8e8e6; box-shadow: 0 0.5px 0 rgba(0, 0, 0, 0.35); transform: translateY(1.5px); }
+.hold .active, .hold[aria-pressed="true"] .idle { display: none; }
+.hold[aria-pressed="true"] .active { display: inline; }
+@media (max-width: 520px) {
+  .hold { bottom: 10px; gap: 7px; padding: 4px 11px 4px 4px; border-radius: 10px; font-size: 13px; line-height: 16px; }
+  .hold kbd { width: 24px; height: 22px; border-radius: 6px; font-size: 13px; }
+}
+/* The label of whatever Booth fixed that's passing now, over its mark. */
+.callout-row { position: relative; height: 28px; margin: 4px 6px 0 64px; }
+.callout {
+  position: absolute;
+  bottom: 4px;
+  left: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  font: 500 12px/16px var(--sans);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity 160ms ease-out, transform 220ms var(--ease-out);
+}
+.callout.shown { opacity: 1; transform: translate(-50%, 0); }
+.lanes { position: relative; display: grid; gap: 4px; margin: 0 6px; cursor: pointer; }
+.lane { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 6px; height: 30px; }
+.lane-name { font: 500 12px/16px var(--sans); color: var(--muted); transition: color 160ms ease-out; }
+.reel[data-hearing="before"] .lane[data-version="before"] .lane-name,
+.reel[data-hearing="after"] .lane[data-version="after"] .lane-name { color: var(--ink); }
+.lane canvas { display: block; width: 100%; height: 30px; }
+/* Over the waveforms: a band on each thing Booth fixed, and the playhead. */
+.marks { position: absolute; top: -3px; bottom: -3px; left: 58px; right: 0; pointer-events: none; }
+.band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 4px;
+  margin-left: -2px;
+  padding-right: 4px;
+  border-radius: 5px;
+  background: rgba(29, 29, 31, 0.04);
+  transition: background-color 220ms ease-out;
+}
+.band.on { background: rgba(29, 29, 31, 0.14); }
+.marks::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: calc(var(--at, 0) * 100%);
+  width: 1.5px;
+  margin-left: -0.75px;
+  border-radius: 1px;
+  background: var(--ink);
+}
+.player.waiting .play { animation: waiting 900ms ease-in-out infinite alternate; }
+@keyframes waiting { to { opacity: 0.55; } }
 
 /* "menu bar" opens the demo, which hangs below it as the popover hangs below Booth's icon. */
 .demo { position: relative; white-space: nowrap; }
@@ -443,7 +603,27 @@ main { width: 100%; max-width: 640px; }
 <main>
   <p class="name" id="name"><span class="sr">Booth</span><span class="name-rest" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span><span class="name-mist" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span><span class="name-focus" aria-hidden="true"><span style="--i: 0">B</span><span style="--i: 1">o</span><span style="--i: 2">o</span><span style="--i: 3">t</span><span style="--i: 4">h</span></span></p>
   <div class="words">
+    <div class="headline">
     <h1><span class="nowrap">Studio speech<span class="player" id="player"><span class="hint" id="hint" aria-hidden="true">Hold<button class="key" type="button" aria-label="Hold for the original" aria-pressed="false" tabindex="-1">⌥</button>for the original</span><button class="play" type="button" aria-label="Play the demo"><svg class="resume" viewBox="0 0 14 14" aria-hidden="true"><path d="M4.5 2.6 L11.5 7 L4.5 11.4 Z"/></svg><svg class="pause" viewBox="0 0 14 14" aria-hidden="true"><rect x="3" y="2.5" width="3" height="9" rx="1"/><rect x="8" y="2.5" width="3" height="9" rx="1"/></svg></button><span class="bars" aria-hidden="true"></span></span></span> for any video or recording, right from your&nbsp;<span class="demo" id="demo"><button class="demo-trigger" type="button" aria-expanded="false" aria-controls="demo-panel">menu bar</button><span class="demo-panel" id="demo-panel" role="dialog" aria-label="How Booth works"><video muted loop playsinline preload="none" poster="media/demo-poster.jpg" aria-label="A video file is dragged onto Booth's menu bar icon and into its drop zone; Booth works on it and shows it done."><source src="media/demo.mp4" type="video/mp4"></video></span></span>.</h1>
+    <section class="reel" id="reel" hidden aria-label="Booth on real recordings, before and after">
+      <div class="reel-body">
+        <div class="reel-card">
+          <div class="stage">
+            <video muted playsinline preload="none" poster="media/reel-poster.jpg" aria-hidden="true"><source src="media/reel.mp4" type="video/mp4"></video>
+            <button class="hold" type="button" aria-pressed="false" aria-label="Hold to hear the original"><kbd aria-hidden="true">⌥</kbd><span class="hold-text" aria-hidden="true"><span class="idle">Hold for the original</span><span class="active">Playing the original</span></span></button>
+            <button class="reel-close" type="button" aria-label="Close the demo"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9"/></svg></button>
+          </div>
+          <div class="callout-row" aria-hidden="true"><span class="callout"></span></div>
+          <div class="lanes" aria-hidden="true">
+            <div class="lane" data-version="before"><span class="lane-name">Original</span><canvas></canvas></div>
+            <div class="lane" data-version="after"><span class="lane-name">Booth</span><canvas></canvas></div>
+            <div class="marks"></div>
+          </div>
+          <span class="sr hearing" aria-live="polite">Booth</span>
+        </div>
+      </div>
+    </section>
+    </div>
     <!-- Point this at the GitHub repository once it exists. -->
     <p>It’s free, <a class="gh" href="https://github.com/shrimbly/booth"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="label">open source<span class="dots" aria-hidden="true"></span><span class="line" aria-hidden="true"></span></span></a> and 100%&nbsp;local.</p>
   </div>
@@ -456,7 +636,7 @@ main { width: 100%; max-width: 640px; }
   <p class="req">macOS 14+ · Apple silicon</p>
 </main>
 </div>
-<script src="media/demo.js"></script>
+<script src="media/reel.js"></script>
 <script>
 (() => {
   // -- coming in, once the name's typeface is ready -----------------------------------------------
@@ -487,129 +667,342 @@ main { width: 100%; max-width: 640px; }
   name.addEventListener("pointerleave", () => name.classList.remove("pointing", "arriving"));
 
   // -- the player ---------------------------------------------------------------------------------
+  // ▶ opens the reel under the sentence: sections of real recordings, the picture over two
+  // waveforms, the original's and Booth's. Both sound tracks play together through Web Audio, one
+  // of them silent, so holding ⌥ (or the hint's key) swaps them without a gap, and the picture
+  // follows the sound. Each thing Booth fixed is marked on the timeline and lights up as it passes.
   const player = document.getElementById("player");
   const playButton = player.querySelector(".play");
   const barsBox = player.querySelector(".bars");
-  const data = window.BOOTH_DEMO || { duration: 30, before: [], after: [] };
+  const reel = document.getElementById("reel");
+  const film = reel.querySelector("video");
+  const lanesBox = reel.querySelector(".lanes");
+  const canvases = { before: reel.querySelector('[data-version="before"] canvas'), after: reel.querySelector('[data-version="after"] canvas') };
+  const marksBox = reel.querySelector(".marks");
+  const callout = reel.querySelector(".callout");
+  const hearing = reel.querySelector(".hearing");
+  const holdButton = reel.querySelector(".hold");
+  const headline = reel.parentElement;
+  const page = document.querySelector("main");
+  const data = window.BOOTH_REEL || { duration: 1, sections: [], peaks: { before: [], after: [] }, events: [] };
+  const duration = data.duration;
   const BAR_COUNT = 32;
-  const FADE_MS = 90;
+  const FADE_S = 0.06;
+  const NAMES = { breath: "Breath", click: "Click", noise: "Background noise" };
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   // Fewer, wider bars than the data has: the mean of each run.
-  const squeeze = (list) => Array.from({ length: BAR_COUNT }, (_, i) => {
+  const squeeze = (list, count) => Array.from({ length: count }, (_, i) => {
     if (!list.length) return 0.06;
-    const k = list.length / BAR_COUNT;
+    const k = list.length / count;
     let sum = 0;
     for (let j = Math.floor(i * k); j < Math.floor((i + 1) * k); j++) sum += list[j];
     return sum / Math.max(1, Math.floor((i + 1) * k) - Math.floor(i * k));
   });
-  const heights = { before: squeeze(data.before), after: squeeze(data.after) };
+  const barHeights = { before: squeeze(data.peaks.before, BAR_COUNT), after: squeeze(data.peaks.after, BAR_COUNT) };
   const bars = Array.from({ length: BAR_COUNT }, () => barsBox.appendChild(document.createElement("span")));
 
-  const tracks = { before: new Audio("media/before.m4a"), after: new Audio("media/after.m4a") };
-  for (const track of Object.values(tracks)) track.preload = "auto";
-  let held = false;        // ⌥, or the hint's key, is down
+  let held = false;         // ⌥, or the hint's key, is down
   let playing = false;
-  let duration = data.duration;
+  let opened = false;
+  let audio = null;         // { ctx, gains, buffers } once loaded
+  let loading = null;
+  let sources = [];
+  let startedAt = 0;        // the audio clock's time at the reel's 0 s
+  let offset = 0;           // where a paused reel is
+  const heard = () => (held ? "before" : "after");
 
-  // iOS ignores volume, so it switches by muting instead of fading.
-  const probe = new Audio();
-  probe.volume = 0.5;
-  const canFade = probe.volume === 0.5;
-
-  const audible = () => (held ? "before" : "after");
-
-  function drawBars() {
-    const list = heights[audible()];
-    bars.forEach((bar, i) => bar.style.setProperty("--h", list[i]));
+  // The context is made and resumed in the click itself, which Safari insists on; the tracks follow.
+  function prepare() {
+    if (loading) return loading;
+    const Context = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Context();
+    const gains = { before: ctx.createGain(), after: ctx.createGain() };
+    for (const [version, gain] of Object.entries(gains)) {
+      gain.gain.value = version === heard() ? 1 : 0;
+      gain.connect(ctx.destination);
+    }
+    const decode = (url) => fetch(url).then((response) => response.arrayBuffer())
+      .then((bytes) => new Promise((resolve, reject) => ctx.decodeAudioData(bytes, resolve, reject)));
+    audio = { ctx, gains, buffers: null };
+    loading = Promise.all([decode("media/reel-original.m4a"), decode("media/reel-booth.m4a")])
+      .then(([before, after]) => { audio.buffers = { before, after }; });
+    loading.catch(() => { loading = null; });
+    return loading;
   }
 
-  let fade = 0;
-  function applyVersion(instant) {
-    const target = audible();
-    const other = target === "before" ? "after" : "before";
-    // Line the incoming track up with the one that was heard before raising it.
-    if (playing && Math.abs(tracks[target].currentTime - tracks[other].currentTime) > 0.03) {
-      tracks[target].currentTime = tracks[other].currentTime;
+  const position = () => Math.min(duration, playing ? audio.ctx.currentTime - startedAt : offset);
+
+  function stopSources() {
+    for (const source of sources) {
+      source.onended = null;
+      try { source.stop(); } catch {}
+      source.disconnect();
     }
-    drawBars();
-    cancelAnimationFrame(fade);
-    if (!canFade || instant) {
-      tracks[target].muted = false;
-      tracks[other].muted = true;
-      tracks[target].volume = 1;
-      tracks[other].volume = 0;
-      return;
-    }
-    tracks[target].muted = false;
-    tracks[other].muted = false;
-    const from = { target: tracks[target].volume, other: tracks[other].volume };
-    const start = performance.now();
-    const step = (now) => {
-      const t = Math.min(1, (now - start) / FADE_MS);
-      tracks[target].volume = from.target + (1 - from.target) * t;
-      tracks[other].volume = from.other * (1 - t);
-      if (t < 1) fade = requestAnimationFrame(step);
-    };
-    fade = requestAnimationFrame(step);
+    sources = [];
   }
 
-  tracks.after.addEventListener("loadedmetadata", () => {
-    if (Number.isFinite(tracks.after.duration)) duration = tracks.after.duration;
+  function startSources(at) {
+    stopSources();
+    const when = audio.ctx.currentTime + 0.04;
+    sources = ["before", "after"].map((version) => {
+      const source = audio.ctx.createBufferSource();
+      source.buffer = audio.buffers[version];
+      source.connect(audio.gains[version]);
+      source.start(when, at);
+      return source;
+    });
+    sources[1].onended = () => { if (playing) finish(); };
+    startedAt = when - at;
+  }
+
+  function applyVersion() {
+    const version = heard();
+    if (audio) {
+      const now = audio.ctx.currentTime;
+      for (const [name, gain] of Object.entries(audio.gains)) {
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.linearRampToValueAtTime(name === version ? 1 : 0, now + FADE_S);
+      }
+    }
+    reel.dataset.hearing = version;
+    hearing.textContent = version === "before" ? "The original" : "Booth";
+    holdButton.setAttribute("aria-pressed", String(version === "before"));
+    bars.forEach((bar, i) => bar.style.setProperty("--h", barHeights[version][i].toFixed(3)));
+    render();
+  }
+
+  // -- drawing ------------------------------------------------------------------------------------
+  function sizeCanvas(canvas) {
+    const ratio = window.devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(box.width * ratio));
+    const height = Math.max(1, Math.round(box.height * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    return { width, height, ratio };
+  }
+
+  // One rounded bar per 3 px; what has played is dark, the rest pale, and the lane you're not
+  // hearing paler still.
+  function drawLane(version, at) {
+    const canvas = canvases[version];
+    const { width, height, ratio } = sizeCanvas(canvas);
+    const g = canvas.getContext("2d");
+    g.clearRect(0, 0, width, height);
+    const peaks = data.peaks[version];
+    if (!peaks.length) return;
+    const step = 3 * ratio;
+    const bar = 2 * ratio;
+    const count = Math.floor(width / step);
+    const live = version === heard();
+    const playedX = (at / duration) * width;
+    for (let i = 0; i < count; i++) {
+      const a = Math.floor((i / count) * peaks.length);
+      const b = Math.max(a + 1, Math.floor(((i + 1) / count) * peaks.length));
+      let peak = 0;
+      for (let j = a; j < b; j++) peak = Math.max(peak, peaks[j]);
+      const h = Math.max(ratio, peak * (height - 2 * ratio));
+      const x = i * step;
+      const played = x + bar <= playedX;
+      g.fillStyle = live
+        ? (played ? "rgba(29, 29, 31, 0.9)" : "rgba(29, 29, 31, 0.28)")
+        : (played ? "rgba(29, 29, 31, 0.32)" : "rgba(29, 29, 31, 0.12)");
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, (height - h) / 2, bar, h, bar / 2);
+      else g.rect(x, (height - h) / 2, bar, h);
+      g.fill();
+    }
+  }
+
+  // The marks: a band over each thing Booth fixed, and one label for whichever is passing now.
+  const marks = data.events.map((event) => {
+    const band = document.createElement("span");
+    band.className = `band ${event.kind}`;
+    band.style.left = `${(100 * event.start) / duration}%`;
+    band.style.width = `${(100 * (event.end - event.start)) / duration}%`;
+    marksBox.appendChild(band);
+    return { ...event, band };
   });
+  const LINGER_S = 0.9;
+  const HOLD_S = 0.8;       // a label stays up this long before a newer mark takes it over
+  let current = null;
+  let shownAt = 0;
 
-  const position = () => tracks[audible()].currentTime;
   function render() {
-    const heard = Math.floor((BAR_COUNT * position()) / duration);
-    bars.forEach((bar, i) => bar.classList.toggle("heard", i < heard));
+    const at = playing ? position() : offset;
+    drawLane("before", at);
+    drawLane("after", at);
+    reel.style.setProperty("--at", (at / duration).toFixed(5));
+    const heardCount = Math.floor((BAR_COUNT * at) / duration);
+    bars.forEach((bar, i) => bar.classList.toggle("heard", i < heardCount));
+
+    let passing = null;
+    for (const mark of marks) {
+      const on = at >= mark.start - 0.12 && at <= mark.end + LINGER_S;
+      mark.band.classList.toggle("on", on);
+      if (on) passing = mark;          // the latest to start
+    }
+    // A click right before a breath still gets its moment.
+    const holding = current && current.band.classList.contains("on") && at - shownAt >= 0 && at - shownAt < HOLD_S;
+    if (holding) passing = current;
+    if (passing !== current) shownAt = at;
+    if (passing !== current || (passing && callout.dataset.version !== heard())) {
+      current = passing;
+      callout.classList.toggle("shown", Boolean(passing));
+      if (passing) {
+        callout.dataset.version = heard();
+        callout.textContent = heard() === "before" ? NAMES[passing.kind] : `${NAMES[passing.kind]} removed`;
+      }
+    }
+    if (current) placeCallout(current);
   }
 
+  // Over the middle of its mark, but never past the card's edges: the row starts where the
+  // waveforms do, so the label may reach back over the lanes' names.
+  function placeCallout(mark) {
+    const box = callout.parentElement.getBoundingClientRect();
+    const card = reel.querySelector(".reel-card").getBoundingClientRect();
+    const row = box.width;
+    const width = callout.offsetWidth;
+    const reach = box.left - card.left - 8;               // back to the card's padding
+    const centre = ((mark.start + mark.end) / 2 / duration) * row;
+    callout.style.left = `${Math.max(width / 2 - reach, Math.min(row - width / 2, centre))}px`;
+  }
+
+  // -- playing ------------------------------------------------------------------------------------
   let frame = 0;
   function tick() {
-    // Keep the silent track within a few frames of the heard one.
-    const heard = tracks[audible()];
-    const silent = tracks[audible() === "before" ? "after" : "before"];
-    if (Math.abs(silent.currentTime - heard.currentTime) > 0.06) silent.currentTime = heard.currentTime;
+    const at = position();
+    // The picture follows the sound; a small drift is let be, a large one is a seek.
+    if (!film.seeking && Math.abs(film.currentTime - at) > 0.15) film.currentTime = at;
     render();
     if (playing) frame = requestAnimationFrame(tick);
   }
 
-  function seek(seconds) {
-    for (const track of Object.values(tracks)) track.currentTime = seconds;
-    render();
+  // Just under the line ▶ is on, over the rest of the sentence.
+  function placeReel() {
+    const top = player.getBoundingClientRect().bottom - headline.getBoundingClientRect().top + 8;
+    reel.style.setProperty("--reel-top", `${Math.round(top)}px`);
+  }
+
+  // While the reel is up, the page lifts so the name, the sentence and the reel sit centred
+  // together rather than hanging off the bottom; it settles back when the reel shuts. Measured
+  // without the lift, so a resize or a reopen halfway through lands in the same place.
+  const MARGIN = 24;
+  function lift() {
+    if (!opened) {
+      page.style.transform = "";
+      return;
+    }
+    const lifted = new DOMMatrixReadOnly(getComputedStyle(page).transform).m42;
+    const top = page.getBoundingClientRect().top - lifted;
+    const bottom = headline.getBoundingClientRect().top - lifted
+      + parseFloat(reel.style.getPropertyValue("--reel-top")) + reel.querySelector(".reel-card").offsetHeight;
+    const target = Math.max(MARGIN, (window.innerHeight - (bottom - top)) / 2);
+    const shift = Math.max(0, Math.round(top - target));
+    page.style.transform = shift ? `translateY(${-shift}px)` : "";
+    // Too tall for the window even lifted: bring the rest of it into view once it has moved.
+    if (bottom - shift > window.innerHeight - MARGIN) {
+      setTimeout(() => reel.scrollIntoView({ block: "nearest", behavior: reduceMotion.matches ? "auto" : "smooth" }), 700);
+    }
+  }
+
+  function openReel() {
+    if (opened) return;
+    close();                      // the demo under "menu bar", which the reel covers
+    opened = true;
+    film.preload = "auto";
+    reel.hidden = false;
+    placeReel();
+    requestAnimationFrame(() => {
+      reel.classList.add("open");
+      lift();
+      render();
+    });
+  }
+
+  // Closing stops it; the next ▶ opens it where it left off.
+  function closeReel() {
+    if (!opened) return;
+    pause();
+    opened = false;
+    reel.classList.remove("open");
+    lift();
   }
 
   async function play() {
-    if (position() >= duration - 0.05) seek(0);
-    playing = true;
-    player.classList.add("playing");
-    playButton.setAttribute("aria-label", "Pause the demo");
-    applyVersion(true);
-    syncHint();
+    openReel();
+    const ready = prepare();
+    audio.ctx.resume();
+    player.classList.add("waiting");
     try {
-      await Promise.all(Object.values(tracks).map((track) => track.play()));
+      await ready;
     } catch {
-      pause();
+      player.classList.remove("waiting");
       return;
     }
+    player.classList.remove("waiting");
+    if (offset >= duration - 0.05) offset = 0;
+    startSources(offset);
+    playing = true;
+    player.classList.add("playing");
+    reel.classList.add("playing");
+    playButton.setAttribute("aria-label", "Pause the demo");
+    film.currentTime = offset;
+    film.play().catch(() => {});
+    applyVersion();
+    syncHint();
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(tick);
   }
 
   function pause() {
+    if (playing) offset = position();
     playing = false;
+    stopSources();
+    film.pause();
     player.classList.remove("playing");
+    reel.classList.remove("playing");
     playButton.setAttribute("aria-label", "Play the demo");
-    for (const track of Object.values(tracks)) track.pause();
     cancelAnimationFrame(frame);
     render();
     syncHint();
   }
 
+  function finish() {
+    pause();
+    offset = duration;
+    render();
+  }
+
+  function seek(seconds) {
+    offset = Math.max(0, Math.min(duration - 0.05, seconds));
+    film.currentTime = offset;
+    if (playing) startSources(offset);
+    render();
+  }
+
   playButton.addEventListener("click", () => (playing ? pause() : play()));
-  tracks.after.addEventListener("ended", () => { pause(); seek(0); });
+  reel.querySelector(".reel-close").addEventListener("click", closeReel);
+  document.addEventListener("pointerdown", (event) => {
+    if (opened && !reel.contains(event.target) && !player.contains(event.target)) closeReel();
+  });
+  window.addEventListener("keydown", (event) => { if (event.key === "Escape") closeReel(); });
+  lanesBox.addEventListener("click", (event) => {
+    const box = marksBox.getBoundingClientRect();
+    const at = ((event.clientX - box.left) / box.width) * duration;
+    if (at >= 0 && at <= duration) seek(at);
+  });
+  window.addEventListener("resize", () => { if (opened) { placeReel(); lift(); render(); } });
+  // Start fetching the moment someone looks like they'll press play.
+  playButton.addEventListener("pointerenter", () => { if (opened || film.preload === "auto") return; film.preload = "auto"; }, { once: true });
 
   // -- hold ⌥ for the original ---------------------------------------------------------------------
-  // The hint shows while the clip plays, or while ⌥ is held, and waits a moment after both stop so
+  // The hint shows while the reel plays, or while ⌥ is held, and waits a moment after both stop so
   // a quick pause doesn't make it flicker.
   const hint = document.getElementById("hint");
   const key = hint.querySelector(".key");
@@ -622,16 +1015,16 @@ main { width: 100%; max-width: 640px; }
       hint.setAttribute("aria-hidden", String(!on));
       key.tabIndex = on ? 0 : -1;
     };
-    if (playing || held) show(true);
-    else hintTimer = setTimeout(() => show(false), HINT_LINGER_MS);
+    // With the reel open, its own button on the picture does this job.
+    if ((playing || held) && !opened) show(true);
+    else hintTimer = setTimeout(() => show(false), opened ? 0 : HINT_LINGER_MS);
   }
 
   function setHeld(down) {
     if (held === down) return;
     held = down;
     key.setAttribute("aria-pressed", String(down));
-    applyVersion(false);
-    render();
+    applyVersion();
     syncHint();
   }
   window.addEventListener("keydown", (event) => { if (event.key === "Alt") { event.preventDefault(); setHeld(true); } });
@@ -643,9 +1036,19 @@ main { width: 100%; max-width: 640px; }
     if (event.key === " " || event.key === "Enter") { event.preventDefault(); setHeld(true); }
   });
   key.addEventListener("keyup", () => setHeld(false));
+  holdButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    holdButton.setPointerCapture?.(event.pointerId);
+    setHeld(true);
+  });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) holdButton.addEventListener(type, () => setHeld(false));
+  holdButton.addEventListener("contextmenu", (event) => event.preventDefault());
+  holdButton.addEventListener("keydown", (event) => {
+    if (event.key === " " || event.key === "Enter") { event.preventDefault(); setHeld(true); }
+  });
+  holdButton.addEventListener("keyup", () => setHeld(false));
 
-  drawBars();
-  render();
+  applyVersion();
 
   // -- the demo under "menu bar" -------------------------------------------------------------------
   // Opens on hover or focus and on click or tap, and plays from the top each time it opens.
@@ -654,6 +1057,7 @@ main { width: 100%; max-width: 640px; }
   const panel = document.getElementById("demo-panel");
   const video = panel.querySelector("video");
   const isOpen = () => panel.classList.contains("open");
+  let opener = 0;
   let closer = 0;
   let openedByClick = false;
 
@@ -670,6 +1074,9 @@ main { width: 100%; max-width: 640px; }
   }
 
   function open(byClick) {
+    // The reel covers "menu bar" while it's open; its demo waits until the reel is shut.
+    if (opened) return;
+    clearTimeout(opener);
     clearTimeout(closer);
     openedByClick = byClick;
     if (isOpen()) return;
@@ -680,6 +1087,7 @@ main { width: 100%; max-width: 640px; }
     video.play().catch(() => {});
   }
   function close() {
+    clearTimeout(opener);
     clearTimeout(closer);
     if (!isOpen()) return;
     panel.classList.remove("open");
@@ -688,9 +1096,20 @@ main { width: 100%; max-width: 640px; }
   }
   // A short grace period lets the pointer cross the gap between the words and the panel.
   const closeSoon = () => { clearTimeout(closer); closer = setTimeout(close, 140); };
+  // Hovering waits a moment, so a pointer passing over the words on its way elsewhere leaves them be.
+  // Coming back from the panel keeps it open at once.
+  const openSoon = () => {
+    if (isOpen()) return open(false);
+    clearTimeout(opener);
+    opener = setTimeout(() => open(false), 350);
+  };
 
-  demo.addEventListener("pointerenter", (event) => { if (event.pointerType !== "touch") open(false); });
-  demo.addEventListener("pointerleave", (event) => { if (event.pointerType !== "touch") closeSoon(); });
+  demo.addEventListener("pointerenter", (event) => { if (event.pointerType !== "touch") openSoon(); });
+  demo.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "touch") return;
+    clearTimeout(opener);
+    closeSoon();
+  });
   trigger.addEventListener("click", () => (isOpen() && openedByClick ? close() : open(true)));
   trigger.addEventListener("focus", () => open(false));
   trigger.addEventListener("blur", closeSoon);
