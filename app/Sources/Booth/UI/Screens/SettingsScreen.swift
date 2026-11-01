@@ -1,7 +1,7 @@
 import BoothCore
 import SwiftUI
 
-/// Engine, three switches and the shortcut. The only screen that takes no drops.
+/// Engine, three switches, the shortcut and updates. The only screen that takes no drops.
 struct SettingsScreen: View {
     let model: AppModel
 
@@ -39,16 +39,55 @@ struct SettingsScreen: View {
                 SettingsRow("Open at login") {
                     BoothSwitch(label: "Open at login", isOn: settings.openAtLogin, onToggle: model.setOpenAtLogin)
                 }
-                SettingsRow("Enhance selected files", hasBottomRule: true) {
+                SettingsRow("Enhance selected files") {
                     Text("⌃⌥E")
                         .textStyle(.action)
                         .tracking(0.08 * 12)
                         .foregroundStyle(theme.text2)
                         .accessibilityLabel("Control Option E")
                 }
+                SettingsRow("Updates", hasBottomRule: true) {
+                    UpdateAccessory(model: model)
+                }
             }
             .padding(.top, 6)
         }
+    }
+}
+
+/// Check now → Checking… → Up to date, or Download <version>, or Couldn't check · Try again.
+private struct UpdateAccessory: View {
+    let model: AppModel
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        switch model.update {
+        case .idle:
+            Button("Check now", action: model.checkForUpdates)
+                .buttonStyle(TextActionButtonStyle(tone: .primary))
+                .accessibilityLabel("Check for updates")
+        case .checking:
+            note("Checking…")
+        case .upToDate:
+            note("Up to date")
+        case .available(let release):
+            Button("Download \(release.version)", action: model.downloadUpdate)
+                .buttonStyle(TextActionButtonStyle(tone: .primary, weight: .semibold))
+                .accessibilityLabel("Download Booth \(release.version)")
+        case .failed:
+            HStack(spacing: 8) {
+                note("Couldn't check")
+                Button("Try again", action: model.checkForUpdates)
+                    .buttonStyle(TextActionButtonStyle(tone: .primary))
+            }
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .textStyle(.action)
+            .foregroundStyle(theme.text2)
     }
 }
 

@@ -200,6 +200,8 @@ a terminal; Finder and `open` don't pass them on.
   - **Keep the original video.** When it's off, Booth writes audio only.
   - **Skip music separation.** This is faster, but the Music slider goes away.
   - **Open at login.** This only takes effect when Booth is in `/Applications` or `~/Applications`.
+  - **Updates: Check now** asks GitHub for the latest release of Booth. When it's newer than yours,
+    **Download** opens its disk image in your browser. Booth only checks when you click.
 
 ## The engine
 

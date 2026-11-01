@@ -77,6 +77,11 @@ final class AppModel {
     /// The focused job's picture, once its file has been read; nil for audio-only jobs.
     private(set) var previewVideo: PreviewVideo?
 
+    // MARK: Updates
+
+    /// Settings → Updates.
+    private(set) var update: UpdateStatus = .idle
+
     let settings: Settings
 
     @ObservationIgnored let dependencies: AppDependencies
@@ -94,6 +99,7 @@ final class AppModel {
     @ObservationIgnored private var isLocating = false
     @ObservationIgnored private var locateTask: Task<Void, Never>?
     @ObservationIgnored private var videoTask: Task<Void, Never>?
+    @ObservationIgnored private var updateTask: Task<Void, Never>?
     /// The engine whose silence failed the last search: Try again asks it again rather than
     /// running setup (which would install a second engine).
     @ObservationIgnored private var unresponsiveEngine: EngineCandidate?
@@ -372,9 +378,38 @@ final class AppModel {
 
     func showSettings() {
         endFinishHold()
-        if screen != .settings { previousScreen = effectiveScreen }
+        if screen != .settings {
+            previousScreen = effectiveScreen
+            // A new visit offers a fresh check; a release that was found stays offered.
+            if update == .upToDate || update == .failed { update = .idle }
+        }
         screen = .settings
         stopPlayback()
+    }
+
+    /// Settings → Check now: asks for the latest release once (another tap while asking is
+    /// ignored) and compares it with this copy's version.
+    func checkForUpdates() {
+        guard update != .checking else { return }
+        update = .checking
+        updateTask = Task {
+            let found: UpdateStatus
+            do {
+                let latest = try await dependencies.system.updates.latestRelease()
+                found = UpdateCheck.isNewer(latest.version, than: version) ? .available(latest) : .upToDate
+                Log.info("update check: latest \(latest.version), this is \(version)")
+            } catch {
+                Log.error("update check: \(error)")
+                found = .failed
+            }
+            update = found
+        }
+    }
+
+    /// Settings → Download: the newer release's disk image, in the browser.
+    func downloadUpdate() {
+        guard case .available(let release) = update else { return }
+        dependencies.system.workspace.open(release.download)
     }
 
     /// Settings → Back; on any other screen behaves like dismissing.
@@ -1024,6 +1059,7 @@ extension AppModel {
         case doneVideoMix = "done-video-mix"
         case doneDropHover = "done-drophover"
         case settings
+        case settingsUpdate = "settings-update"
         case error
 
         /// The screen the fixture must show.
@@ -1034,7 +1070,7 @@ extension AppModel {
             case .working: .working
             case .done, .doneMix, .doneDirtyComparing, .doneNoMusic, .doneVideo, .doneVideoPortrait, .doneVideoMix,
                  .doneDropHover: .done
-            case .settings: .settings
+            case .settings, .settingsUpdate: .settings
             case .error: .error
             }
         }
@@ -1138,6 +1174,10 @@ extension AppModel {
         case .settings:
             model.previousScreen = .idle
             model.screen = .settings
+        case .settingsUpdate:
+            model.previousScreen = .idle
+            model.screen = .settings
+            model.update = .available(Release(version: "0.2.0", download: UpdateCheck.latestRelease))
         case .error:
             model.error = .noAudio(fileName: "b-roll-silent.mov")
             model.errorFileName = "b-roll-silent.mov"

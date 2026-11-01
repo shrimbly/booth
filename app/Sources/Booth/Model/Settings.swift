@@ -95,6 +95,15 @@ final class Settings {
     }
 }
 
+/// Settings → Updates: not asked yet, asking, or what the latest release said.
+enum UpdateStatus: Equatable {
+    case idle
+    case checking
+    case upToDate
+    case available(Release)
+    case failed
+}
+
 enum AppInfo {
     static let bundleIdentifier = "studio.booth.Booth"
 

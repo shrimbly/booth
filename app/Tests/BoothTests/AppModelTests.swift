@@ -23,10 +23,11 @@ struct Harness {
     }
 
     /// `remixing` replaces the instant `remixer` (saves that take time or fail); `video` reads
-    /// done jobs' pictures (none by default).
+    /// done jobs' pictures (none by default); `updates` answers Settings → Check now.
     init(
         availability: EngineAvailability = .ready(.demo), remixing: Remixing? = nil,
-        video: VideoInspecting = NoVideoInspector(), finishHold: Duration = .zero
+        video: VideoInspecting = NoVideoInspector(), updates: UpdateChecking = NoUpdates(),
+        finishHold: Duration = .zero
     ) {
         locator = StubEngineLocator(availability: availability)
         let clock = Clock()
@@ -35,7 +36,7 @@ struct Harness {
             settings: settings,
             dependencies: AppDependencies(
                 engine: EngineServices(locator: locator, jobs: runner, setup: setupRunner, remixer: remixing ?? remixer, player: player),
-                system: SystemServices(notifier: notifier, loginItem: loginItem, workspace: workspace, video: video)),
+                system: SystemServices(notifier: notifier, loginItem: loginItem, workspace: workspace, video: video, updates: updates)),
             stemsRoot: URL(fileURLWithPath: "/tmp/booth-tests/jobs", isDirectory: true),
             now: { clock.now },
             finishHold: finishHold)
@@ -1260,5 +1261,64 @@ struct FakeJobRunnerTests {
         for name in ["a.wav", "interview-take3.mp4", "voice-memo.m4a", "x", ""] {
             #expect((6...11).contains(FakeJobRunner.demoSeconds(for: name)))
         }
+    }
+}
+
+@Suite("Update check")
+@MainActor
+struct UpdateCheckModelTests {
+    static let newer = Release(version: "99.0.0", download: URL(string: "https://example.com/Booth.dmg")!)
+
+    @Test func aNewerReleaseIsOfferedAndDownloadOpensItsImage() async {
+        let updates = FixedUpdates(.success(Self.newer))
+        let h = Harness(updates: updates)
+        h.model.showSettings()
+        #expect(h.model.update == .idle)
+        h.model.checkForUpdates()
+        #expect(h.model.update == .checking)
+        await waitFor(2) { h.model.update != .checking }
+        #expect(h.model.update == .available(Self.newer))
+        h.model.downloadUpdate()
+        #expect(h.workspace.opened == [Self.newer.download])
+        // Still offered next time Settings opens.
+        h.model.back()
+        h.model.showSettings()
+        #expect(h.model.update == .available(Self.newer))
+    }
+
+    @Test func theSameVersionIsUpToDateAndAskedAfreshNextVisit() async {
+        let h = Harness(updates: FixedUpdates(.success(Release(version: AppInfo.version, download: UpdateCheck.latestRelease))))
+        h.model.showSettings()
+        h.model.checkForUpdates()
+        await waitFor(2) { h.model.update != .checking }
+        #expect(h.model.update == .upToDate)
+        h.model.downloadUpdate()
+        #expect(h.workspace.opened.isEmpty)
+        h.model.back()
+        h.model.showSettings()
+        #expect(h.model.update == .idle)
+    }
+
+    @Test func aFailedCheckCanBeTriedAgain() async {
+        struct Offline: Error {}
+        let updates = FixedUpdates(.failure(Offline()))
+        let h = Harness(updates: updates)
+        h.model.checkForUpdates()
+        await waitFor(2) { h.model.update != .checking }
+        #expect(h.model.update == .failed)
+        updates.answer = .success(Self.newer)
+        h.model.checkForUpdates()
+        await waitFor(2) { h.model.update != .checking }
+        #expect(h.model.update == .available(Self.newer))
+        #expect(updates.checks == 2)
+    }
+
+    @Test func aSecondTapWhileCheckingAsksOnce() async {
+        let updates = FixedUpdates(.success(Self.newer), delay: .milliseconds(50))
+        let h = Harness(updates: updates)
+        h.model.checkForUpdates()
+        h.model.checkForUpdates()
+        await waitFor(2) { h.model.update != .checking }
+        #expect(updates.checks == 1)
     }
 }
