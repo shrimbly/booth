@@ -268,7 +268,8 @@ as a deploy key. Each works on its own, so after renewing the certificate, run j
 open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. Vercel deploys
 it to [getbooth.vercel.app](https://getbooth.vercel.app) from every push to `main` (the project's
 root directory is `site/`; `site/.vercelignore` keeps `tools/` off the web). The download button
-links to `Booth.dmg` on the latest GitHub release.
+links to `Booth.dmg` on the latest GitHub release. The link-preview card, `site/assets/og.png`, is
+`site/tools/og-card.html` rendered by Chrome; the command is at the top of that file.
 To replace the before/after clip:
 
 ```bash
