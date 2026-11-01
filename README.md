@@ -2,7 +2,7 @@
 
 **Studio-quality voice for your recordings, enhanced on your Mac.**
 
-[Website](https://getbooth.vercel.app) · [Download for Mac](https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg) · `brew install shrimbly/booth/booth`
+[Website](https://getbooth.xyz) · [Download for Mac](https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg) · `brew install shrimbly/booth/booth`
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/booth-dark.png">
@@ -39,7 +39,7 @@ $ booth interview.mp4 podcast.wav
 
 ### Download
 
-Download `Booth.dmg` from the [website](https://getbooth.vercel.app) (or the
+Download `Booth.dmg` from the [website](https://getbooth.xyz) (or the
 [latest release](https://github.com/shrimbly/booth/releases/latest)), open it, and drag Booth to
 Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
 
@@ -266,7 +266,7 @@ as a deploy key. Each works on its own, so after renewing the certificate, run j
 `site/` is a single static page: one sentence with a player for a 30-second before/after clip
 (hold ⌥ to hear the original) and a short video of Booth at work behind "menu bar". To try it,
 open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. Vercel deploys
-it to [getbooth.vercel.app](https://getbooth.vercel.app) from every push to `main` (the project's
+it to [getbooth.xyz](https://getbooth.xyz) from every push to `main` (the project's
 root directory is `site/`; `site/.vercelignore` keeps `tools/` off the web). The download button
 links to `Booth.dmg` on the latest GitHub release. The link-preview card, `site/assets/og.png`, is
 `site/tools/og-card.html` rendered by Chrome; the command is at the top of that file.
