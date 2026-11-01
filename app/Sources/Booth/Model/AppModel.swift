@@ -292,11 +292,20 @@ final class AppModel {
         case .needsSetup(let installation):
             Log.info("engine needs setup: \(installation?.executable.path ?? "no engine found")")
             beginSetup()
+            showSetup()
         case .unresponsive(let candidate):
             Log.error("engine not answering: \(candidate.path); setup is not started")
             unresponsiveEngine = candidate
             setup = .failed(message: Formatting.engineUnresponsiveMessage(folder: Self.engineFolder(candidate)))
+            showSetup()
         }
+    }
+
+    /// Booth can't take a file until setup is done, so the popover opens on it: after a first
+    /// launch it is the only sign of what Booth is doing, and where it lives.
+    private func showSetup() {
+        guard !isOpen else { return }
+        open()
     }
 
     /// The folder to name for an engine, as the user would write it (`~/projects/sv`).

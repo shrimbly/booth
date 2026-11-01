@@ -27,10 +27,20 @@ final class StatusItemController: NSObject {
     private var displaysAsleep = false
     private var sessionInactive = false
 
+    /// The name macOS gives an app's first status item, and a second one the icon takes turns
+    /// with while it settles: changing names makes macOS place it by the new name's position.
+    private static let itemName = "Item-0"
+    private static let settlingName = "Booth settling"
+    /// The first launch's search for the icon's place; nil once it has settled.
+    private var settling: MenuBarPlacement.Search?
+    private var settlingCheck: DispatchWorkItem?
+
     init(model: AppModel) {
         self.model = model
+        let firstPosition = Self.placeOnFirstLaunch()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+        settling = firstPosition.map { MenuBarPlacement.Search(position: $0) }
         configureButton()
         configureDropTarget()
         observeEnvironment()
@@ -54,6 +64,49 @@ final class StatusItemController: NSObject {
     var onFilesDropped: (() -> Void)?
 
     // MARK: Setup
+
+    /// Where macOS keeps an icon's place, by the icon's name (`MenuBarPlacement`).
+    private static func positionKey(_ name: String) -> String {
+        "NSStatusItem Preferred Position \(name)"
+    }
+
+    /// macOS adds a new icon at the left end of the others, which on a full menu bar is behind
+    /// the camera housing or off the screen, so a first launch shows no icon at all. Until it is
+    /// moved, Booth's goes fourth from the right instead (`MenuBarPlacement`): this is the first
+    /// guess, which `settle()` corrects once the icon is drawn. Nil after the first launch.
+    private static func placeOnFirstLaunch() -> Double? {
+        let key = positionKey(itemName)
+        guard UserDefaults.standard.object(forKey: key) == nil else { return nil }
+        let menuBar = menuBarIcons()
+        let guess = menuBar.flatMap { menuBar in
+            MenuBarPlacement.preferredPosition(icons: menuBar.icons.map { ($0.minX, $0.maxX) }, screenMaxX: menuBar.screenMaxX)
+        }
+        UserDefaults.standard.set(guess ?? 0, forKey: key)
+        Log.info("status item: first placement, preferred position \(Int(guess ?? 0)) among \(menuBar?.icons.count ?? 0) icons")
+        return guess ?? 0
+    }
+
+    /// The icons in the main display's menu bar, from the window list: their frames need no
+    /// permission (their names would).
+    private static func menuBarIcons() -> (icons: [(number: Int, minX: Double, maxX: Double)], screenMaxX: Double)? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let level = Int(CGWindowLevelForKey(.statusWindow))
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let icons = windows.compactMap { window -> (number: Int, minX: Double, maxX: Double)? in
+            guard window[kCGWindowLayer as String] as? Int == level,
+                  let number = window[kCGWindowNumber as String] as? Int,
+                  // Stand-ins the window server draws while an icon is dragged.
+                  window[kCGWindowOwnerName as String] as? String != "Window Server",
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  // In the main display's menu bar (window-list coordinates start at its top left).
+                  frame.minY < 2, frame.height < 60, frame.width >= 12,
+                  frame.minX >= screen.frame.minX, frame.maxX <= screen.frame.maxX + 4
+            else { return nil }
+            return (number, Double(frame.minX), Double(frame.maxX))
+        }
+        return (icons, Double(screen.frame.maxX))
+    }
 
     private func configureButton() {
         guard let button = statusItem.button else {
@@ -120,8 +173,71 @@ final class StatusItemController: NSObject {
 
     private func windowDidMove(_ window: NSWindow?) {
         guard let window, window === statusItem.button?.window else { return }
-        Log.info("status item at \(NSStringFromRect(window.frame))")
+        Log.info("status item at \(NSStringFromRect(window.frame))\(Self.isHidden(window.frame) ? " (hidden: off the screen or behind the camera housing)" : "")")
         onAnchorChange?()
+        if settling != nil { checkSettling(after: 0.25) }
+    }
+
+    /// Off every screen, or partly under a camera housing (between the menu bar's two halves).
+    private static func isHidden(_ frame: NSRect) -> Bool {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: frame.midX, y: frame.midY)) }) else {
+            return true
+        }
+        guard let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else { return false }
+        return frame.maxX > left.maxX && frame.minX < right.minX
+    }
+
+    // MARK: Settling the first placement
+
+    private func checkSettling(after delay: TimeInterval) {
+        settlingCheck?.cancel()
+        let check = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.settle() }
+        }
+        settlingCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: check)
+    }
+
+    /// Counts the movable icons between Booth's and Control Centre, and moves it until there
+    /// are three (`MenuBarPlacement.Search`).
+    private func settle() {
+        guard var search = settling, let window = statusItem.button?.window,
+              // Placed in a menu bar at all, hidden or not.
+              window.frame.minY >= 0,
+              let menuBar = Self.menuBarIcons()
+        else { return }
+        let others = menuBar.icons.filter { $0.number != window.windowNumber }
+        let available = max(0, others.count - MenuBarPlacement.fixedIcons)
+        let toTheRight = max(0, others.filter { $0.minX >= window.frame.maxX - 1 }.count - MenuBarPlacement.fixedIcons)
+        if let next = search.next(iconsToTheRight: toTheRight, available: available) {
+            settling = search
+            move(to: next)
+        } else {
+            settling = nil
+            keep(search.position)
+            Log.info("status item: settled with \(toTheRight) of \(available) icons between it and Control Centre (preferred position \(Int(search.position)))")
+        }
+    }
+
+    /// Places the icon by `position`. macOS rereads a position when the icon's name changes, so
+    /// the icon takes turns between its two.
+    private func move(to position: Double) {
+        let name = statusItem.autosaveName == Self.settlingName ? Self.itemName : Self.settlingName
+        UserDefaults.standard.set(position, forKey: Self.positionKey(name))
+        statusItem.autosaveName = name
+        Log.info("status item: trying preferred position \(Int(position))")
+        checkSettling(after: 0.4)
+    }
+
+    /// Ends under its usual name at `position`, and leaves nothing of the other behind.
+    private func keep(_ position: Double) {
+        let defaults = UserDefaults.standard
+        if statusItem.autosaveName != Self.itemName {
+            defaults.set(position, forKey: Self.positionKey(Self.itemName))
+            statusItem.autosaveName = Self.itemName
+        }
+        defaults.removeObject(forKey: Self.positionKey(Self.settlingName))
+        defaults.removeObject(forKey: "NSStatusItem Visible \(Self.settlingName)")
     }
 
     private func visibilityDidChange(_ name: Notification.Name) {

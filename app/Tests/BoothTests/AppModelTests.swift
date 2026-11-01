@@ -740,9 +740,28 @@ struct AppModelTests {
         #expect(h.model.activeJob?.name == "a.wav")
     }
 
+    /// After a first launch, setup is all Booth has to show, so the popover opens on it. A launch
+    /// with the engine ready stays in the menu bar.
+    @Test func setupOpensThePopoverAtLaunch() async throws {
+        let ready = await Harness.ready()
+        #expect(!ready.model.isOpen)
+
+        let firstRun = Harness(availability: .needsSetup(nil))
+        await firstRun.model.checkEngine()
+        #expect(firstRun.model.isOpen)
+        #expect(firstRun.model.effectiveScreen == .firstrun)
+
+        let silent = Harness(availability: .unresponsive(EngineCandidate(path: "/Users/someone/sv/.venv/bin/booth", source: .launchArgument)))
+        await silent.model.checkEngine()
+        #expect(silent.model.isOpen)
+        #expect(silent.model.effectiveScreen == .firstrun)
+    }
+
     @Test func setupFailureAndRetry() async throws {
         let h = Harness(availability: .needsSetup(nil))
         await h.model.checkEngine()
+        // Dismissed while setup runs: a failure lights the icon.
+        h.model.close()
         h.setupRunner.send(.error(JobError(code: .setupFailed, message: "No internet.")))
         #expect(h.model.setupFailureMessage == "No internet.")
         #expect(h.model.glyphMode == .attention)
@@ -763,6 +782,9 @@ struct AppModelTests {
         #expect(h.model.setup == .failed(message: Formatting.engineUnresponsiveMessage(folder: folder)))
         #expect(h.model.setupFailureMessage?.hasSuffix("choose Allow, then click Try again.") == true)
         #expect(h.setupRunner.startCount == 0)
+        #expect(h.model.effectiveScreen == .firstrun)
+        // Dismissed, the icon carries the failure.
+        h.model.close()
         #expect(h.model.glyphMode == .attention)
         h.model.open()
         #expect(h.model.effectiveScreen == .firstrun)
