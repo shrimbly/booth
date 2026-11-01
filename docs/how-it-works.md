@@ -52,7 +52,12 @@ Sidon-specific post-processing, each step measured on the benchmark:
   context degrades the model (96 s chunks: UTMOS 3.77 vs 3.89 on a 112 s file).
 - **Tone correction.** Sidon runs 6–8 dB hotter than Adobe above 12 kHz on every
   lossless pair (audible as fizz), so the chain applies a −6 dB shelf from
-  12 kHz, a 20 kHz rolloff, and a 40 Hz high-pass for regenerated rumble.
+  12 kHz, a 20 kHz rolloff, and a 40 Hz high-pass for regenerated rumble. Its
+  low end also comes out 4–7 dB fuller than the input below 500 Hz (most at
+  80–125 Hz), which sounds boomy, as Adobe's does: a −3 dB shelf below 150 Hz,
+  easing to flat an octave up, and a 12 dB/octave roll-off below 60 Hz take
+  the edge off. That was picked by ear over stronger cuts and over matching
+  the input's own balance.
 - **Speech gate keyed by DeepFilterNet3.** The generative model reproduces
   mouse clicks and low-level noise in pauses. DF3's output marks where speech
   actually is, and a lookahead gate with a 12 dB range drops pauses to around
@@ -62,6 +67,18 @@ Sidon-specific post-processing, each step measured on the benchmark:
   pulls down short bursts that stand far above the audio on *both* sides, so
   p/t/k bursts are kept because their vowel follows immediately. Off with
   `--no-declick`.
+- **Breath removal.** Sidon rebuilds the breaths between phrases, which
+  Adobe leaves out, and in a clean voice they sound like noise. `dsp.breath_frames`
+  marks a 10 ms frame as breath when it is clear of sustained pitch, 12 dB or
+  more below the speech, centred 0.7–3.5 kHz like an inhale, and not speech to
+  [Silero VAD](https://github.com/snakers4/silero-vad) (`booth/vad.py`), which
+  tells a breath from quiet speech by context. Pitch counts only when it is
+  loud or low, because the tracker finds stray pitch in breath noise. Runs with
+  120 ms or more you can hear are breaths, widened up to 60 ms into the quiet
+  beside them, and come down to the level of the pauses, never below it, so the
+  room sound stays even. On a 200 s voice-over this removed 90% of the breath
+  time Adobe silenced (52 of 57 breaths), plus under a second of what Adobe
+  kept, and left speech level unchanged. Off with `--no-breaths`.
 - **Harmonic smoothing.** Sidon's harmonics are fuzzier than Adobe's, which
   is heard as a slightly rough, "wobbly" voice. A pitch-following filter turns
   down the energy between harmonics by up to 6 dB below 3.5 kHz. Voiced

@@ -123,6 +123,8 @@ def _add_enhance_args(p: argparse.ArgumentParser) -> None:
                       help="keep Sidon's raw harmonics (no harmonic smoothing)")
     tune.add_argument("--no-declick", action="store_true",
                       help="keep mouth and tongue clicks (sidon)")
+    tune.add_argument("--no-breaths", action="store_true",
+                      help="keep the breaths between phrases")
     tune.add_argument("--no-expander", action="store_true",
                       help="no pause gate on the voice channel")
     tune.add_argument("--no-polish", action="store_true",
@@ -194,7 +196,7 @@ def _settings(args: argparse.Namespace, progress: bool):
         engine=args.engine, polish=not args.no_polish,
         split_music=not args.no_split, low_gate=not args.no_low_gate,
         air=not args.no_air, level=not args.no_leveler,
-        smooth=not args.no_smooth, declick=not args.no_declick,
+        smooth=not args.no_smooth, declick=not args.no_declick, breaths=not args.no_breaths,
         match_eq=not args.no_match_eq, expander=not args.no_expander,
         linear=args.linear, loudness=loudness,
         device=args.device, crf=args.crf, audio_only=args.audio_only,

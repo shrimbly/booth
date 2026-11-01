@@ -20,7 +20,7 @@ dependencies = [
   "demucs>=4.1.0,<5",
   "soundfile>=0.12",
   "rich>=13",
-  "onnxruntime>=1.16",   # DNSMOS perceptual scoring
+  "onnxruntime>=1.16",   # Silero VAD (breath removal) and DNSMOS scoring
 ]
 
 [project.scripts]

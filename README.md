@@ -148,7 +148,7 @@ missing.
 | `-v`, `--verbose` | off | Log each processing step and its timing |
 | `-q`, `--quiet` | off | No progress; print only the finished files, errors and engine fallbacks |
 
-`booth enhance --help` lists the fine-tuning switches (`--no-declick`, `--no-smooth`,
+`booth enhance --help` lists the fine-tuning switches (`--no-breaths`, `--no-declick`, `--no-smooth`,
 `--lufs N` from −70 to −5, and others). [How it works](docs/how-it-works.md) explains what each one does.
 
 | Exit status | Meaning |

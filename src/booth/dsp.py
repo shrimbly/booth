@@ -443,19 +443,115 @@ def speech_gate_gain(key: np.ndarray, sr: int = 48000,
     return lambda x: _apply_gain(x, lambda a, b: np.interp(np.arange(a, b), centers, gains))
 
 
+def _frame_levels(x: np.ndarray, sr: int, hop: int,
+                  win: int) -> tuple[np.ndarray, np.ndarray]:
+    """Mean square and spectral centroid of each frame [k*hop, k*hop + win)."""
+    k = max(0, (len(x) - win) // hop + 1)
+    level, centroid = np.empty(k), np.empty(k)
+    window = np.hanning(win)
+    freqs = np.fft.rfftfreq(win, 1 / sr)
+    per = max(1, BLOCK // hop)
+    for k0 in range(0, k, per):
+        k1 = min(k, k0 + per)
+        seg = x[k0 * hop:(k1 - 1) * hop + win].astype(np.float64)
+        frames = np.lib.stride_tricks.sliding_window_view(seg, win)[::hop]
+        level[k0:k1] = (frames ** 2).mean(axis=1)
+        power = np.abs(np.fft.rfft(frames * window, axis=1)) ** 2
+        centroid[k0:k1] = power @ freqs / (power.sum(axis=1) + 1e-20)
+    return level, centroid
+
+
+def breath_gain(x: np.ndarray, speech_prob: np.ndarray, sr: int = 48000,
+                prob_hop_s: float = 0.032) -> tuple[Callable[[np.ndarray], np.ndarray], int]:
+    """The breaths between phrases (breath_frames), taken down to the level of the
+    pauses around them. Returns the gain as a function of a signal of x's length
+    (fixed, like speech_gate_gain's, so the voice stems still remix live) and the
+    number of breaths."""
+    breath, rel, count = breath_frames(x, speech_prob, sr, prob_hop_s)
+    if not breath.any():
+        return (lambda y: y), 0
+    hop, win = sr // 100, sr // 25
+    quiet = rel[~breath & (rel < -30)]
+    floor = float(np.median(quiet)) if quiet.size else -60.0
+    g = np.where(breath, np.minimum(0.0, floor - rel), 0.0)
+    g = np.convolve(np.pad(g, 2, mode="edge"), np.ones(5) / 5, mode="valid")    # 20 ms ramps
+    centers = np.arange(len(g)) * hop + win / 2
+    return (lambda y: _apply_gain(y, lambda a, b: 10 ** (np.interp(np.arange(a, b), centers, g) / 20))), count
+
+
+def breath_frames(x: np.ndarray, speech_prob: np.ndarray, sr: int = 48000,
+                  prob_hop_s: float = 0.032) -> tuple[np.ndarray, np.ndarray, int]:
+    """Which 10 ms frames of `x` are breaths between phrases.
+
+    Restoring engines rebuild the breaths that Adobe's model leaves out, and in a
+    clean voice they sound like noise. A 10 ms frame is breath when it is clear
+    of sustained pitch, sits 12 dB or more below the speech, has an inhale's
+    spectrum (centred 0.7-3.5 kHz; below -35 dB it is too quiet to tell) and
+    Silero (`speech_prob`, one value per `prob_hop_s`) hears no speech in it.
+    Runs of those frames with 120 ms or more you can hear are breaths, widened by
+    up to 60 ms into the quiet beside them, where Silero still hears the word
+    before. On a 200 s voice-over this took out 89% of the breath time Adobe
+    silenced, and under a second of what Adobe kept.
+
+    Returns the breath frames (frame i starts at i * sr // 100), every frame's
+    level in dB re the speech, and the number of breaths.
+    """
+    from scipy import ndimage
+
+    hop, win = sr // 100, sr // 25
+    level, centroid = _frame_levels(x, sr, hop, win)
+    voiced = track_f0(x, sr)[1]                         # the same 10 ms frames
+    k = min(len(level), len(voiced))
+    if k < 4 or not len(speech_prob):
+        return np.zeros(max(k, 0), bool), np.full(max(k, 0), -120.0), 0
+    level, centroid, voiced = level[:k], centroid[:k], voiced[:k]
+    rel = 10 * np.log10(level + 1e-20) - active_speech_db(x, sr)
+    prob = speech_prob[np.minimum((np.arange(k) * 0.01 / prob_hop_s).astype(int), len(speech_prob) - 1)]
+
+    # Pitch in a voice is loud or low; the tracker's stray pitch in breath noise is neither.
+    voiced &= (centroid < 1500) | (rel > -15)
+    sustained = ndimage.binary_opening(voiced, structure=np.ones(4, bool))       # 40 ms or more
+    near_voice = ndimage.binary_dilation(sustained, iterations=3)                # within 30 ms
+    safe = ~near_voice & (rel < -12) & (prob < 0.8)
+    breathy = ((centroid > 700) & (centroid < 3500)) | (rel < -35)
+    candidate = ndimage.binary_closing(safe & (rel > -55) & breathy, iterations=3) & safe
+    labels, _ = ndimage.label(candidate)
+    breath = np.zeros(k, bool)
+    for i, found in enumerate(ndimage.find_objects(labels), 1):
+        run = labels[found[0]] == i
+        if (rel[found[0]][run] > -40).sum() >= 12:                   # 120 ms you can hear
+            breath[found[0]] |= run
+    count = int(ndimage.label(breath)[1])
+    breath |= ndimage.binary_dilation(breath, iterations=6) & ~near_voice & (rel < -20)
+    return breath, rel, count
+
+
 def restoration_tone(x: np.ndarray, sr: int = 48000, hp_hz: float = 40.0,
-                     shelf_db: float = -6.0, lp_hz: float = 20000.0) -> np.ndarray:
+                     shelf_db: float = -6.0, lp_hz: float = 20000.0,
+                     low_shelf_db: float = -3.0, low_shelf_hz: float = 150.0,
+                     low_cut_hz: float = 60.0) -> np.ndarray:
     """Tone correction for Sidon output, measured against Adobe references.
 
     Sidon's midrange tracks Adobe within each clip's natural variance, but it is
     consistently 6-8 dB hotter above 12 kHz (audible as fizz/haze) and extends
     to Nyquist where Adobe rolls off at ~20 kHz. It also regenerates sub-40 Hz
     rumble that dominates the gap noise floor.
+
+    Its low end comes out 4-7 dB fuller than the input below 500 Hz, most at
+    80-125 Hz, which sounds boomy (Adobe's does the same). A shelf of
+    `low_shelf_db` below `low_shelf_hz`, easing to flat an octave above, and a
+    12 dB/octave roll-off below `low_cut_hz` ease it, chosen by ear over stronger
+    cuts and over matching the input's own balance.
     """
     sos = signal.butter(2, hp_hz, "high", fs=sr, output="sos")
-    fr = np.array([0.0, 11000.0, 14000.0, lp_hz - 500.0, lp_hz + 1000.0, sr / 2])
-    g = np.array([0.0, 0.0, shelf_db, shelf_db, -60.0, -60.0])
-    taps = design_match_fir(fr, g, sr)
+    fr = np.geomspace(10.0, sr / 2, 600)
+    high = np.interp(fr, [0.0, 11000.0, 14000.0, lp_hz - 500.0, lp_hz + 1000.0, sr / 2],
+                     [0.0, 0.0, shelf_db, shelf_db, -60.0, -60.0])
+    octave = np.clip(np.log2(fr / low_shelf_hz), 0.0, 1.0)
+    low = low_shelf_db * (0.5 + 0.5 * np.cos(np.pi * octave))
+    low_cut = -10 * np.log10(1 + (low_cut_hz / fr) ** 4)           # Butterworth, 2nd order
+    # Enough taps to follow the curve at 60 Hz (~3 Hz resolution).
+    taps = design_match_fir(fr, high + low + low_cut, sr, ntaps=16383)
     n = len(x)
     margin = len(taps) + sr // 2            # the FIR's reach plus time for the high-pass to settle
     out = np.empty(n, np.float32)

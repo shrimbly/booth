@@ -83,6 +83,7 @@ class Settings:
     level: bool = True              # slow AGC on the voice channel
     smooth: bool = True             # harmonic smoothing (generative engines)
     declick: bool = True            # mouth/tongue click removal (generative engines)
+    breaths: bool = True            # take breaths between phrases down to the pauses' level
     linear: bool = False            # bypass calibrated slider curves
     loudness: str | float | None = "auto"   # "auto" | LUFS float | None
     device: str = "cpu"
@@ -423,9 +424,19 @@ def enhance_file(inp: Path, out: Path | None, st: Settings, log=print,
         # voice sound rough/"wobbly" next to Adobe's.
         clean = dsp.harmonic_smooth(clean, A.SR)
 
+    breaths = None
+    if st.breaths:
+        # A restored voice keeps the breaths between phrases; Adobe's leaves them out.
+        from . import vad
+        breaths, count = dsp.breath_gain(clean, vad.speech_probability(clean, A.SR), A.SR)
+        log(f"  ({count} breath{'s' if count != 1 else ''} taken down to the pauses' level)")
+
     s, b, m = mix_coefficients(st.speech, st.background, st.music, st.linear)
     if gate is None:
         gate = voice_gate(st, None, clean)
+    if breaths is not None:
+        # Both fixed gains, so the voice stems still remix live.
+        gate = (lambda g, br: lambda x: br(g(x)))(gate, breaths)
     leveler = st.level and not generative   # measured −0.07 UTMOS on Sidon output, which is already level
     voice = s * clean
     voice += (1 - s) * vocals               # in place: the same sum, one array fewer
