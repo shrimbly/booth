@@ -170,9 +170,11 @@ class Requirement:
 
 
 # Sizes are the published file sizes (Sidon 795 498 929 + 209 824 877,
-# HTDemucs 84 025 440 + yaml, DeepFilterNet3 archive ≈ its 8.7 MB contents).
+# HTDemucs 84 025 440 + yaml, DeepFilterNet3 archive ≈ its 8.7 MB contents,
+# ffmpeg.zip 28 395 699 + ffprobe.zip 28 317 701). ffmpeg is only downloaded
+# when none is installed, so an installed one counts as present.
 REQUIREMENTS: tuple[Requirement, ...] = (
-    Requirement("ffmpeg", "ffmpeg", 0, lambda: not tools.missing_ffmpeg_tools()),
+    Requirement("ffmpeg", "ffmpeg", 56_713_400, lambda: not tools.missing_ffmpeg_tools()),
     Requirement("sidon-venv", "voice engine", 0, sidon_venv_ready),
     Requirement("sidon-weights", "Sidon voice model", 1_005_323_806,
                 lambda: hf_has(SIDON_REPO, SIDON_FILES, SIDON_REVISION)),

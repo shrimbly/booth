@@ -20,10 +20,10 @@ new mix saves in a few seconds. **Done** takes you back to the drop zone.
   Otherwise Booth installs its own engine the first time it runs. For that it needs `uv` (the build
   bundles the copy on your `PATH` when there is one) and a network connection for about 1.1 GB of
   models.
-- `ffmpeg` and `ffprobe` for every file, audio or video (`brew install ffmpeg` installs both). Booth
-  looks in the `PATH` it was started with, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`,
-  `~/.cargo/bin`, and then asks your login shell. Without them, setup stops before it installs the
-  engine.
+- `ffmpeg` and `ffprobe` for every file, audio or video. Booth looks in the `PATH` it was started
+  with, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.cargo/bin`, and then asks your
+  login shell. Without them, setup downloads a static build of both into `~/.cache/booth/bin`
+  (57 MB), which comes last on the engine's `PATH`, so an ffmpeg you install later takes over.
 
 ## Build, run, install
 
@@ -230,8 +230,7 @@ last install didn't finish. The search stops there and setup updates it (see bel
 Booth creates the managed install only when every candidate is missing or broken. An engine that
 is slow to answer doesn't count as broken. These are the steps:
 
-1. It checks that it can find `ffmpeg` and `ffprobe`. If it can't, setup stops with "Booth needs
-   ffmpeg", before anything is downloaded.
+1. It looks for uv, and for `ffmpeg` and `ffprobe`. Without them, step 4 downloads them.
 2. It copies `Booth.app/Contents/Resources/engine` to `~/Library/Application Support/Booth/engine`.
 3. It runs `uv sync --frozen --python 3.11` there, with the bundled uv or the system's.
 4. It runs `booth setup --events`.
@@ -252,6 +251,8 @@ Setup downloads these, about 1.1 GB in total (the engine reports the exact figur
 - the Sidon weights and the w2v-BERT preprocessor
 - htdemucs
 - DeepFilterNet3
+- ffmpeg and ffprobe, only when they aren't installed: Martin Riedl's static build of FFmpeg 9.0.2,
+  checked against pinned SHA-256 hashes
 
 The popover shows the progress. **Run in background** closes the popover while setup continues.
 Files you drop in the meantime wait in the queue and start when setup finishes.
@@ -375,8 +376,8 @@ Start with the log: `tail -f ~/Library/Logs/Booth/booth.log`.
   - Setup needs network access.
   - If the log says uv is missing, install uv (`brew install uv`) or rebuild with uv on your
     `PATH`, so the build bundles it.
-  - "Booth needs ffmpeg": install it (`brew install ffmpeg`), then click **Try again**. If ffmpeg
-    is installed somewhere else, Booth finds it the way a login shell does: check that
+  - "Couldn't download ffmpeg": setup downloads ffmpeg when it can't find one. If you have one
+    installed somewhere else, Booth finds it the way a login shell does: check that
     `zsh -l -c 'command -v ffmpeg'` prints its path. If it only works in Terminal, move the line
     that adds its folder to `PATH` from `~/.zshrc` to `~/.zprofile`.
 - **"Booth would like to access files in your Documents folder", or Booth shows "Waiting for the

@@ -21,12 +21,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 
-from . import tools
 from .progress import ProgressTicker, SpeedBook, plan_enhance, plan_remix
 
 DEBUG = os.environ.get("BOOTH_DEBUG", "") not in ("", "0")
-NO_FFMPEG = ("[red]error:[/] Booth needs ffmpeg. Install it with "
-             "[bold]brew install ffmpeg[/], then try again.")
 
 
 class Problem(Exception):
@@ -36,9 +33,6 @@ class Problem(Exception):
 def enhance_files(args: Namespace, make_settings: Callable) -> int:
     """`booth INPUT...`: enhance each input in turn; 1 if any failed."""
     err = Console(stderr=True, highlight=False, emoji=False)
-    if tools.missing_ffmpeg_tools():
-        err.print(NO_FFMPEG)
-        return 1
 
     # A mistyped name fails now, not after a first-run download of minutes.
     failed = 0
@@ -179,16 +173,26 @@ def compare_files(args: Namespace) -> int:
     from .eval import compare, print_report
 
     err = Console(stderr=True, highlight=False, emoji=False)
-    if tools.missing_ffmpeg_tools():
-        err.print(NO_FFMPEG)
-        return 1
-    for path in (args.ref, args.test):
-        try:
+    try:
+        for path in (args.ref, args.test):    # a mistyped name fails before any download
             _check_input(path)
+    except Problem as p:
+        err.print(f"[red]error:[/] {escape(str(path))}: {escape(str(p))}")
+        return 1
+    try:
+        _ensure(err, {"ffmpeg"}, quiet=False)
+    except KeyboardInterrupt:
+        err.print("[yellow]Cancelled.[/] The download will resume where it stopped.")
+        return 130
+    except Problem as p:
+        err.print(f"[red]error:[/] {escape(str(p))}")
+        return 1
+    try:
+        for path in (args.ref, args.test):
             _probe(path)
-        except Problem as p:
-            err.print(f"[red]error:[/] {escape(str(path))}: {escape(str(p))}")
-            return 1
+    except Problem as p:
+        err.print(f"[red]error:[/] {escape(str(path))}: {escape(str(p))}")
+        return 1
     try:
         res = compare(args.ref, args.test)
     except KeyboardInterrupt:
@@ -301,26 +305,33 @@ def _check_writable(finals: list[Path]) -> None:
 # -- first run -----------------------------------------------------------------
 
 def _needed(args: Namespace) -> set[str]:
-    """The setup items this run's engine reads (ffmpeg is checked separately)."""
+    """The setup items this run reads."""
     if args.engine == "sidon":
-        need = {"sidon-venv", "sidon-weights", "w2v-bert", "df3"}
+        need = {"ffmpeg", "sidon-venv", "sidon-weights", "w2v-bert", "df3"}
     else:
-        need = {"df3"}
+        need = {"ffmpeg", "df3"}
     if not args.no_split:
         need.add("htdemucs")
     return need
 
 
 def _ensure_models(err: Console, args: Namespace, quiet: bool) -> None:
+    _ensure(err, _needed(args), quiet)
+
+
+def _ensure(err: Console, need: set[str], quiet: bool) -> None:
+    """Download whichever of `need` is missing, saying what and how much first."""
     from . import installer, requirements
 
-    need = _needed(args) & set(requirements.BY_ID)
-    if not requirements.missing(need):
+    missing = requirements.missing(need & set(requirements.BY_ID))
+    if not missing:
         return
     if not quiet:
-        size = requirements.download_bytes(requirements.missing(need)) / 1e9
-        err.print(f"First run: downloading the voice models ({size:.1f} GB). "
-                  "This happens once.")
+        size = requirements.download_bytes(missing)
+        amount = f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB"
+        what = ("ffmpeg" if [r.id for r in missing] == ["ffmpeg"]
+                else "the voice models")
+        err.print(f"First run: downloading {what} ({amount}). This happens once.")
     _download(err, installer, need, quiet)
 
 

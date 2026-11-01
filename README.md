@@ -33,7 +33,8 @@ $ booth interview.mp4 podcast.wav
 - macOS 14 (Sonoma) or later on Apple silicon, with 16 GB of memory or more. The voice model needs
   about 12 GB while it works, however long the recording.
 - About 3 GB of disk space for the voice models and the engine, downloaded on first use.
-- [ffmpeg](https://ffmpeg.org), to read and write audio and video. Homebrew installs it with Booth.
+- [ffmpeg](https://ffmpeg.org), to read and write audio and video. Booth uses yours if you have
+  one, and otherwise downloads its own during setup (57 MB).
 
 ## Install
 
@@ -44,7 +45,7 @@ Download `Booth.dmg` from the [website](https://getbooth.xyz) (or the
 Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
 
 The first time, Booth sets up its engine and downloads the voice models: about 1.1 GB, once. If
-you don't have ffmpeg, install it with [Homebrew](https://brew.sh): `brew install ffmpeg`.
+you don't have ffmpeg, it downloads that too.
 
 To use `booth` in Terminal as well, link the copy inside Booth onto your `PATH`:
 
@@ -67,7 +68,7 @@ your `PATH`, and installs ffmpeg. `brew upgrade` keeps both up to date, and
 Without the app, install the `booth` command with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-brew install uv ffmpeg
+brew install uv
 uv tool install --python 3.11 git+https://github.com/shrimbly/booth   # or `.` from a checkout
 booth setup                                                           # optional: download the models now
 ```
@@ -286,8 +287,9 @@ DEMO_POSTER=still.jpg site/tools/make-demo-video.sh
 
 ## License
 
-MIT; see [LICENSE](LICENSE). Booth.app also carries uv (MIT or Apache 2.0) and the Geist Serif
-typeface (SIL Open Font License), and the engine downloads these models under their own licenses:
-Sidon and w2v-BERT 2.0 (MIT), Demucs (MIT), DeepFilterNet (MIT or Apache 2.0) and ClearVoice
-MossFormer2 (Apache 2.0). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and the
+MIT; see [LICENSE](LICENSE). Booth.app also carries uv (MIT or Apache 2.0), the Geist Serif
+typeface (SIL Open Font License) and Silero VAD's speech detector (MIT). The engine downloads
+these models under their own licenses: Sidon and w2v-BERT 2.0 (MIT), Demucs (MIT), DeepFilterNet
+(MIT or Apache 2.0) and ClearVoice MossFormer2 (Apache 2.0), and on a Mac without ffmpeg, a build
+of FFmpeg (GPL 3.0). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and the
 app has a copy of it and of `LICENSE` in `Contents/Resources`.

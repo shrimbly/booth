@@ -25,9 +25,16 @@ public enum EngineEnvironment {
         ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.cargo/bin"]
     }
 
+    /// Where the engine's setup puts the ffmpeg and ffprobe it downloads when neither is installed
+    /// (the engine's `tools.BIN_DIR`).
+    public static func downloadedToolsDirectory(home: String) -> String {
+        home + "/.cache/booth/bin"
+    }
+
     /// `base` with `PATH` extended, unbuffered Python output, and `BOOTH_ENGINE_UV` set when Booth
     /// found a uv (whose directory also joins `PATH`). `toolDirectories` replaces the usual ones
     /// (nil keeps them); `extraDirectories` follow them, such as where the login shell found ffmpeg.
+    /// The ffmpeg Booth downloaded comes last of all, so one of the user's own always wins.
     public static func make(
         base: [String: String],
         home: String,
@@ -43,6 +50,7 @@ public enum EngineEnvironment {
         var path = basePath.split(separator: ":").map(String.init).filter { !$0.isEmpty }
         var extras = (toolDirectories ?? Self.toolDirectories(home: home)) + extraDirectories
         if let uv { extras.append((uv as NSString).deletingLastPathComponent) }
+        extras.append(downloadedToolsDirectory(home: home))
         for directory in extras where !path.contains(directory) && directoryExists(directory) {
             path.append(directory)
         }

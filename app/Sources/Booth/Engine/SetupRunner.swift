@@ -9,8 +9,8 @@ import Foundation
 ///
 /// It never installs when the last search stopped at an engine that didn't answer: that engine
 /// exists (macOS may be holding it at a folder prompt), and a ~600 MB install would bury it. It
-/// asks that engine again instead, which is what Try again after that failure needs. Nor does it
-/// install without ffmpeg, which the engine needs for every file.
+/// asks that engine again instead, which is what Try again after that failure needs. A Mac
+/// without ffmpeg needs nothing more: the engine's setup downloads one along with the models.
 @MainActor
 final class SetupRunner: SetupRunning {
     private let locator: EngineLocator
@@ -73,12 +73,10 @@ final class SetupRunner: SetupRunning {
             executable = existing
             combiner = SetupProgressCombiner(installBytesExpected: 0, modelBytesTotal: 0)
         } else {
-            // The engine checks this too, but only after the ~540 MB install.
             await locator.toolchain.prepare()
             let missingTools = locator.toolchain.missingMediaTools
-            guard missingTools.isEmpty else {
-                Log.error("setup: \(missingTools.joined(separator: ", ")) not found; not creating the managed install")
-                throw JobError(code: .setupFailed, message: "Booth needs ffmpeg. Install it with Homebrew (brew install ffmpeg), then try again.")
+            if !missingTools.isEmpty {
+                Log.info("setup: \(missingTools.joined(separator: ", ")) not found; the engine will download them")
             }
             Log.info(locator.managedInstallNeedsUpdate
                 ? "setup: updating the managed install to the engine bundled with Booth"

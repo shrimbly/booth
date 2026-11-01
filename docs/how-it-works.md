@@ -128,7 +128,11 @@ least-squares fitting Adobe's output onto this pipeline's stem basis:
 
 ## Video and multitrack files
 
-ffmpeg reads the input and writes the enhanced copy (`audio.py`).
+ffmpeg reads the input and writes the enhanced copy (`audio.py`). Booth uses
+the ffmpeg on your `PATH`. On a Mac without one, setup downloads Martin Riedl's
+static build of FFmpeg 9.0.2 for Apple silicon into `~/.cache/booth/bin`,
+checked against pinned SHA-256 hashes, and puts that folder last on the
+engine's `PATH`, so an ffmpeg you install later takes over.
 
 - **The track that's enhanced** is the one ffmpeg would pick itself: a
   default track first, then the one with the most channels. It's mixed down to

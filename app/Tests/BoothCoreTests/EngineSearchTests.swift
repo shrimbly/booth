@@ -97,7 +97,7 @@ struct EngineEnvironmentTests {
 
     @Test func extendsAFinderLaunchedPath() {
         let environment = make(["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
-        #expect(environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.cargo/bin")
+        #expect(environment["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.cargo/bin:/Users/me/.cache/booth/bin")
     }
 
     @Test func keepsExistingOrderAndOnlyAddsDirectoriesThatExist() {
@@ -124,7 +124,15 @@ struct EngineEnvironmentTests {
     @Test func toolDirectoriesCanBeReplaced() {
         let environment = EngineEnvironment.make(
             base: ["PATH": "/usr/bin"], home: "/Users/me", uv: nil, toolDirectories: ["/tools"]) { _ in true }
-        #expect(environment["PATH"] == "/usr/bin:/tools")
+        #expect(environment["PATH"] == "/usr/bin:/tools:/Users/me/.cache/booth/bin")
+    }
+
+    @Test func theFfmpegBoothDownloadedComesLast() {
+        let downloaded = "/Users/me/.cache/booth/bin"
+        let environment = make(["PATH": "/usr/bin"], uv: "/opt/conda/bin/uv", extra: ["/opt/local/bin"],
+                               existing: ["/opt/homebrew/bin", "/opt/local/bin", "/opt/conda/bin", downloaded])
+        #expect(environment["PATH"] == "/usr/bin:/opt/homebrew/bin:/opt/local/bin:/opt/conda/bin:\(downloaded)")
+        #expect(make(["PATH": "/usr/bin"], existing: [])["PATH"] == "/usr/bin")
     }
 
     @Test func tellsTheShimNotToInstall() {

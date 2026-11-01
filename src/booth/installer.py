@@ -1,11 +1,11 @@
 """`booth setup`: install whatever the default pipeline is missing.
 
 Every install step runs as a child process — uv for the Sidon venv, the Sidon
-venv's own Python for its weights, this Python for htdemucs and DeepFilterNet3
-— so a cancel kills them with the process group and the main loop stays free
-to report progress. Download progress is measured by polling the size of the
-cache directories the libraries write into (huggingface_hub, torch hub,
-DeepFilterNet), against the known size of each model.
+venv's own Python for its weights, this Python for htdemucs, DeepFilterNet3 and
+ffmpeg — so a cancel kills them with the process group and the main loop stays
+free to report progress. Download progress is measured by polling the size of
+the directories the downloads write into (huggingface_hub, torch hub,
+DeepFilterNet, ffmpeg's partial folder), against the known size of each.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import __version__, tools
 from . import requirements as R
 from .progress import soft_fraction
 
@@ -73,6 +74,45 @@ try:
     final = os.path.join(cache, {R.DF3_MODEL!r})
     shutil.rmtree(final, ignore_errors=True)
     os.replace(os.path.join(part, {R.DF3_MODEL!r}), final)
+finally:
+    shutil.rmtree(part, ignore_errors=True)
+"""
+
+# ffmpeg and ffprobe for a Mac without them: Martin Riedl's static builds of
+# FFmpeg 9.0.2 for Apple silicon, signed with his Developer ID. The build server
+# keeps every release at its versioned address; the hashes are the ones it
+# publishes beside each zip.
+FFMPEG_BUILD = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2"
+FFMPEG_SHA256 = {
+    "ffmpeg": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+    "ffprobe": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+}
+FFMPEG_PARTIAL = tools.BIN_DIR.with_name(tools.BIN_DIR.name + ".partial")
+
+# Unpacks beside the bin folder and moves the tools in only once both check out.
+# (The build server turns away Python's default User-Agent.)
+_FFMPEG_DOWNLOAD = f"""
+import hashlib, os, shutil, sys, urllib.request, zipfile
+part, final = {str(FFMPEG_PARTIAL)!r}, {str(tools.BIN_DIR)!r}
+shutil.rmtree(part, ignore_errors=True)
+os.makedirs(part)
+try:
+    for name, digest in {FFMPEG_SHA256!r}.items():
+        archive = os.path.join(part, name + ".zip")
+        request = urllib.request.Request({FFMPEG_BUILD!r} + "/" + name + ".zip",
+                                         headers={{"User-Agent": "Booth/{__version__}"}})
+        with urllib.request.urlopen(request, timeout=60) as r, open(archive, "wb") as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+        with open(archive, "rb") as f:
+            if hashlib.file_digest(f, "sha256").hexdigest() != digest:
+                sys.exit(name + " download doesn't match the tested build")
+        with zipfile.ZipFile(archive) as z:
+            z.extract(name, part)
+        os.chmod(os.path.join(part, name), 0o755)
+        os.remove(archive)
+    os.makedirs(final, exist_ok=True)
+    for name in {tuple(FFMPEG_SHA256)!r}:
+        os.replace(os.path.join(part, name), os.path.join(final, name))
 finally:
     shutil.rmtree(part, ignore_errors=True)
 """
@@ -207,6 +247,9 @@ def plan(missing: list[R.Requirement]) -> list[Task]:
     env = dict(os.environ, HF_HUB_DISABLE_PROGRESS_BARS="1", HF_HUB_VERBOSITY="error",
                TQDM_DISABLE="1")
     tasks: list[Task] = []
+    if "ffmpeg" in ids:
+        tasks.append(Task("ffmpeg", ("ffmpeg",), [[sys.executable, "-c", _FFMPEG_DOWNLOAD]],
+                          env=env))
     if "sidon-venv" in ids:
         from .engines import sidon
         R.SIDON_VENV.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +282,8 @@ def _byte_roots(missing: list[R.Requirement]) -> dict[Path, int]:
         roots[R.torch_hub_checkpoints()] = sizes["htdemucs"]
     if "df3" in sizes:
         roots[R.deepfilter_cache()] = sizes["df3"]
+    if "ffmpeg" in sizes:
+        roots[FFMPEG_PARTIAL] = sizes["ffmpeg"]
     return {root: expected for root, expected in roots.items() if expected > 0}
 
 
@@ -249,9 +294,6 @@ def run(emit: Emit, only: set[str] | None = None,
     Raises SetupError on failure (running steps are terminated first).
     """
     missing = R.missing(only)
-    if any(r.id == "ffmpeg" for r in missing):
-        raise SetupError("Booth needs ffmpeg. Install it with Homebrew "
-                         "(brew install ffmpeg), then try again.")
     total = R.download_bytes(missing)
     if not missing:
         emit("setup", phase="weights", label="Downloading voice models",
@@ -287,6 +329,7 @@ def run(emit: Emit, only: set[str] | None = None,
                 except subprocess.TimeoutExpired:
                     t.proc.kill()
 
+    tools.ensure_tool_path()         # a downloaded ffmpeg's folder exists now
     still = R.missing(only)
     if still:
         names = ", ".join(r.label for r in still)
@@ -341,5 +384,6 @@ def _failure_message(task: Task) -> str:
     if task.label == "voice engine":
         msg = "Booth couldn't install the voice engine."
     else:
-        msg = f"Booth couldn't download the {task.label}. Check your internet connection."
+        what = "ffmpeg" if task.label == "ffmpeg" else f"the {task.label}"
+        msg = f"Booth couldn't download {what}. Check your internet connection."
     return f"{msg} ({last[:160]})" if last else msg

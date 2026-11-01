@@ -86,6 +86,7 @@ is set up, or the first time a feature needs them, and they stay under their own
 | [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) (DeepFilterNet3) | the `df3` engine, and finding speech for the pause gate | MIT or Apache 2.0 |
 | [ClearVoice](https://github.com/modelscope/ClearerVoice-Studio) (MossFormer2_SE_48K) | the `mossformer2` engine | Apache 2.0 |
 | [DNSMOS P.835](https://github.com/microsoft/DNS-Challenge) | the quality scores in `booth eval` | MIT |
+| [FFmpeg](https://ffmpeg.org) 9.0.2, [built by Martin Riedl](https://ffmpeg.martin-riedl.de) | reading and writing audio and video, on a Mac without ffmpeg of its own | GPL 3.0 or later |
 
 The Python packages the engine installs (PyTorch, NumPy, SciPy and the others that `uv.lock`
 names) come from the Python Package Index, each under its own license.

@@ -196,15 +196,15 @@ struct ManagedEngineUpdateTests {
         }
     }
 
-    @Test func withoutFfmpegNothingIsInstalled() async throws {
+    /// The engine's setup downloads ffmpeg with the models, so a Mac without it is set up as usual.
+    @Test(.enabled(if: EngineToolchainTests.noBundledUV))
+    func withoutFfmpegTheEngineIsStillInstalled() async throws {
         let fixture = try ManagedEngineFixture(ffmpeg: false)
         #expect(await fixture.locator.locate() == .needsSetup(nil))
         let recorder = await fixture.runSetup()
-        #expect(recorder.terminal == [.error(JobError(
-            code: .setupFailed, message: "Booth needs ffmpeg. Install it with Homebrew (brew install ffmpeg), then try again."))])
-        #expect(!recorder.installed)
-        #expect(fixture.uvCalls.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: EngineSearch.managedEngineDirectory(home: fixture.home).path))
+        #expect(recorder.terminal == [.done(EngineDone())])
+        #expect(recorder.installed)
+        #expect(fixture.uvCalls == ["sync --frozen --python 3.11"])
     }
 }
 
