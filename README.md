@@ -197,7 +197,7 @@ each step is there, the calibration of the other engines, and the benchmark.
 | Script | What it does |
 |---|---|
 | `app/scripts/build-app.sh` | Builds `app/build/Booth.app`. Add `--dist` for a build meant for other Macs, `--sign IDENTITY` to sign with a Developer ID. |
-| `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`; `--sign` and `--notarize` sign and notarize the image. |
+| `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`, in the window `packaging/dmg` lays out (dmgbuild, run through uv); `--sign` and `--notarize` sign and notarize the image. |
 | `app/scripts/release.sh` | Runs the tests, then builds, signs, notarizes and packages a release into `dist/`. `--publish` uploads it to GitHub and updates the Homebrew tap. |
 | `app/scripts/set-release-secrets.sh` | Puts the signing certificate, the notary key and the tap's deploy key into the secrets the release workflow uses. |
 | `site/tools/make-demo.py` | Rebuilds the website's before/after demo from two recordings. |
