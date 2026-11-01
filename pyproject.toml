@@ -10,17 +10,16 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }
 dependencies = [
-  # Pinned as a known-good stack: deepfilternet 0.5.6 needs numpy<2;
-  # torch/torchaudio 2.2.2 predate the torchaudio backend removals it relies on.
-  "numpy>=1.24,<2.0",
+  # Sidon's results were tested with exactly these; uv.lock pins everything else.
+  "torch==2.15.0",
+  "transformers==5.21.0",
+  "huggingface_hub==2.3.0",
+  "numpy>=2.0",
   "scipy>=1.11",
-  "torch==2.2.2",
-  "torchaudio==2.2.2",
-  "deepfilternet==0.5.6",
   "demucs>=4.1.0,<5",
   "soundfile>=0.12",
   "rich>=13",
-  "onnxruntime>=1.16",   # Silero VAD (breath removal) and DNSMOS scoring
+  "onnxruntime>=1.16",   # DeepFilterNet3, Silero VAD (breath removal) and DNSMOS scoring
 ]
 
 [project.scripts]
@@ -28,3 +27,7 @@ booth = "booth.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/booth"]
+
+[tool.uv]
+# Booth runs on Apple silicon; torch has no Intel Mac builds past 2.2.
+environments = ["sys_platform != 'darwin' or platform_machine == 'arm64'"]

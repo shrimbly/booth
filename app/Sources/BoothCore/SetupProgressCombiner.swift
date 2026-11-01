@@ -7,9 +7,9 @@ import Foundation
 public struct SetupProgressCombiner: Equatable, Sendable {
     public static let installPhase = "engine"
     public static let installLabel = "Installing the engine"
-    /// The engine's virtual environment after `uv sync` from uv.lock (torch dominates): 537 MB
-    /// measured on arm64.
-    public static let typicalEnvironmentBytes: Int64 = 540_000_000
+    /// The engine's virtual environment after `uv sync` from uv.lock (torch and transformers
+    /// dominate): 950 MB allocated, measured on arm64.
+    public static let typicalEnvironmentBytes: Int64 = 950_000_000
     /// What `setup --events` downloads when nothing is cached (SPEC §1.2).
     public static let typicalModelBytes: Int64 = 1_130_000_000
 

@@ -6,10 +6,10 @@ resynthesizes 48 kHz studio speech from them — so it rebuilds harmonics and
 bandwidth instead of masking noise. On the benchmark pairs it matches Adobe's
 DNSMOS/UTMOS (UTMOS 3.70 vs Adobe 3.72; MossFormer2 scored 2.80).
 
-Runs out-of-process in a self-bootstrapped venv at ~/.cache/booth
-(torch 2.15 + transformers 5.21, which conflict with this project's pinned
-torch 2.2.2 stack; every package is pinned in requirements.SIDON_PINS).
-Weights (~1 GB) download from the HF hub on first use, at pinned commits.
+Runs in a child process of the engine's own Python (torch 2.15 + transformers
+5.21, pinned in pyproject.toml), so the ~12 GB it holds while it works goes
+back to the system the moment it finishes. Weights (~1 GB) download from the
+HF hub on first use, at pinned commits.
 CPU only: the traced graph uses float64 ops that MPS rejects. ~0.4x realtime
 on an M-series CPU.
 
@@ -31,57 +31,9 @@ import numpy as np
 
 from .. import audio as A
 from .. import requirements as R
-from .. import tools
-from ..requirements import SIDON_VENV as VENV
 
 # Lines the runner prints on stderr so the caller can show real progress.
 PROGRESS_PREFIX = "@@sidon "
-
-# Run by this Python to build the venv. It holds a lock beside the venv for the
-# whole install, so a second setup (another terminal, or Booth while the CLI
-# installs) waits and then finds the venv ready instead of deleting it under
-# the first; the kernel drops the lock if the installer is killed. The venv
-# starts over, because an interrupted install can leave a package half linked
-# that uv then counts as installed. The "installing" marker keeps a failed
-# install from being adopted as a venv from before markers
-# (requirements.sidon_venv_ready).
-_INSTALL = """
-import fcntl, os, pathlib, shutil, signal, subprocess, sys
-venv, marker, installing, ready, lock, uv, verify, *pins = sys.argv[1:]
-child = None
-
-def stop(signum, frame):
-    if child is not None and child.poll() is None:
-        child.terminate()
-    sys.exit(128 + signum)
-
-signal.signal(signal.SIGTERM, stop)
-with open(lock, "w") as held:
-    fcntl.flock(held, fcntl.LOCK_EX)
-    marker = pathlib.Path(marker)
-    if marker.exists() and marker.read_text() == ready:
-        sys.exit(0)
-    if os.path.lexists(venv):
-        shutil.rmtree(venv)
-    os.makedirs(venv)
-    marker.write_text(installing)
-    python = os.path.join(venv, "bin", "python")
-    for cmd in ([uv, "venv", "--allow-existing", "--python", "3.11", venv],
-                [uv, "pip", "install", "--python", python, *pins],
-                [python, "-c", verify, str(marker), ready]):
-        child = subprocess.Popen(cmd)
-        if child.wait() != 0:
-            sys.exit(child.returncode)
-"""
-
-# Run by the venv's Python after the install: the marker names the pins only
-# once everything the runner imports actually loads.
-_VERIFY = """
-import pathlib, sys
-import huggingface_hub, numpy, scipy.signal, soundfile, torch, transformers
-transformers.SeamlessM4TFeatureExtractor
-pathlib.Path(sys.argv[1]).write_text(sys.argv[2])
-"""
 
 _RUNNER = '''
 import sys, warnings
@@ -176,32 +128,10 @@ sf.write(outp, out[:len(x)] / g, 48000, subtype="FLOAT")
 '''
 
 
-def bootstrap_commands() -> list[list[str]]:
-    """Commands that build the Sidon venv from scratch with uv and mark it ready."""
-    uv = tools.uv_path()
-    if uv is None:
-        raise RuntimeError("uv is required to install the Sidon engine but was not found")
-    VENV.parent.mkdir(parents=True, exist_ok=True)
-    return [[sys.executable, "-c", _INSTALL, str(VENV), str(R.SIDON_MARKER), R.SIDON_INSTALLING,
-             R.sidon_marker_text(), str(VENV.with_name(VENV.name + ".lock")), uv, _VERIFY,
-             *R.SIDON_PINS]]
-
-
-def _bootstrap(log=print) -> None:
-    if R.sidon_venv_ready():
-        return
-    log("  (bootstrapping sidon env — one-time, ~2 min + 1 GB weights)")
-    VENV.parent.mkdir(parents=True, exist_ok=True)
-    for cmd in bootstrap_commands():
-        p = subprocess.run(cmd, capture_output=True, text=True)
-        if p.returncode != 0:
-            raise RuntimeError(f"bootstrap failed: {' '.join(cmd)}\n{p.stderr[-800:]}")
-
-
 ProgressCallback = Callable[[str, int, int], None]
 
 
-def enhance(audio: np.ndarray, sr: int, chunk_s: float = 30.0, log=print,
+def enhance(audio: np.ndarray, sr: int, chunk_s: float = 30.0,
             on_progress: ProgressCallback | None = None) -> np.ndarray:
     """Restore mono float32 speech. Returns 48 kHz audio, same length as input.
 
@@ -210,7 +140,6 @@ def enhance(audio: np.ndarray, sr: int, chunk_s: float = 30.0, log=print,
     `on_progress(name, done, total)` receives "sidon.loaded" once the models
     are in memory and "sidon.chunk" (input samples restored so far) per chunk.
     """
-    _bootstrap(log)
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         inp, out, runner = td / "in.wav", td / "out.wav", td / "runner.py"
@@ -218,7 +147,7 @@ def enhance(audio: np.ndarray, sr: int, chunk_s: float = 30.0, log=print,
         assert sr == 48000, "sidon runner expects 48 kHz input"
         runner.write_text(_RUNNER)
         returncode, output_tail = _run_runner(
-            [str(VENV / "bin" / "python"), str(runner), str(inp), str(out),
+            [sys.executable, str(runner), str(inp), str(out),
              R.SIDON_REPO, R.SIDON_REVISION, R.W2V_REPO, R.W2V_REVISION, str(chunk_s)],
             on_progress)
         if returncode != 0 or not out.exists():

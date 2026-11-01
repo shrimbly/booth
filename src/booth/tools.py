@@ -12,11 +12,14 @@ import os
 import shutil
 from pathlib import Path
 
-# Engine-owned state: the Sidon venv, learned speeds, MossFormer2 checkpoints.
+# Engine-owned state: learned speeds, MossFormer2 checkpoints, downloaded ffmpeg.
 CACHE_DIR = Path.home() / ".cache" / "booth"
 # The ffmpeg and ffprobe setup downloads when none is installed. It comes last on
 # PATH, so an ffmpeg of the user's own always wins.
 BIN_DIR = CACHE_DIR / "bin"
+# What earlier engines kept here and this one doesn't use: Sidon's own Python
+# environment (about 850 MB) and its install lock.
+LEFTOVERS = (CACHE_DIR / "sidon-venv", CACHE_DIR / "sidon-venv.lock")
 
 _EXTRA_PATHS = (
     "/opt/homebrew/bin",
@@ -46,3 +49,16 @@ def uv_path() -> str | None:
 
 def missing_ffmpeg_tools() -> list[str]:
     return [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+
+
+def remove_leftovers() -> None:
+    """Delete LEFTOVERS. Setup does this, rather than every run, so an older Booth still
+    installed alongside isn't pulled out from under a job."""
+    for path in LEFTOVERS:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                path.unlink()
+            except OSError:
+                pass

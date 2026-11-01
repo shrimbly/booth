@@ -119,7 +119,26 @@ final class ManagedEngineInstaller {
             throw JobError(code: .setupFailed, message: "Booth couldn't finish installing its engine: \(error.localizedDescription)")
         }
         Log.info("managed install: ready at \(executable.path) (engine \(version))")
+        removeLeftovers()
         return executable
+    }
+
+    /// What earlier engines kept beside the managed install and this one doesn't use: Sidon's own
+    /// Python environment (about 850 MB) and its install lock (the engine's `tools.LEFTOVERS`).
+    /// Removed in the background once this engine is installed, as `booth setup` does.
+    private func removeLeftovers() {
+        let cache = toolchain.home.appendingPathComponent(".cache/booth", isDirectory: true)
+        let leftovers = ["sidon-venv", "sidon-venv.lock"].map { cache.appendingPathComponent($0) }
+        Task.detached(priority: .background) {
+            for url in leftovers where FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                    Log.info("managed install: removed \(url.path), which this engine doesn't use")
+                } catch {
+                    Log.error("managed install: couldn't remove \(url.path): \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     // MARK: - Private

@@ -7,11 +7,11 @@ import Foundation
 public enum EngineEnvironment {
     public static let fallbackPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 
-    /// The engine's own override for the uv it uses to bootstrap the Sidon venv.
+    /// The engine's own override for the uv it runs the MossFormer2 engine with.
     public static let uvKey = "BOOTH_ENGINE_UV"
 
     /// Tells the `booth` command in Booth.app not to install or update the engine. Booth
-    /// does that itself, with progress; a probe must never start a 540 MB install.
+    /// does that itself, with progress; a probe must never start a 950 MB install.
     public static let noInstallKey = "BOOTH_NO_INSTALL"
 
     /// The engine reads and writes every file, audio or video, with these.

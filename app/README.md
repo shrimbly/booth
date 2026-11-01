@@ -232,9 +232,10 @@ last install didn't finish. The search stops there and setup updates it (see bel
 Booth creates the managed install only when every candidate is missing or broken. An engine that
 is slow to answer doesn't count as broken. These are the steps:
 
-1. It looks for uv, and for `ffmpeg` and `ffprobe`. Without them, step 4 downloads them.
+1. It looks for uv, and for `ffmpeg` and `ffprobe` (step 4 downloads those two if they're missing).
 2. It copies `Booth.app/Contents/Resources/engine` to `~/Library/Application Support/Booth/engine`.
-3. It runs `uv sync --frozen --python 3.11` there, with the bundled uv or the system's.
+3. It runs `uv sync --frozen --python 3.11` there, with the bundled uv or the system's. Then it
+   deletes `~/.cache/booth/sidon-venv`, the separate environment earlier versions ran Sidon in.
 4. It runs `booth setup --events`.
 
 The same steps update the managed install after you upgrade Booth. The copy keeps `.venv`, so
@@ -249,10 +250,8 @@ If an engine passes the check but reports `ready: false`, Booth runs only
 
 Setup downloads these, about 1.1 GB in total (the engine reports the exact figure, which the popover shows):
 
-- the Sidon environment (`~/.cache/booth/sidon-venv`)
 - the Sidon weights and the w2v-BERT preprocessor
 - htdemucs
-- DeepFilterNet3
 - ffmpeg and ffprobe, only when they aren't installed: Martin Riedl's static build of FFmpeg 9.0.2,
   checked against pinned SHA-256 hashes
 
@@ -268,7 +267,7 @@ to stderr, which Booth copies to its log. Each side ignores keys and events it d
 | Command | Output |
 |---|---|
 | `booth app-info` | One `info` line, fast (no torch import): `{"event":"info","protocol":1,"version":"0.1.0","engines":["sidon","mossformer2","df3"],"ready":true,"missing":[],"python":"…"}` |
-| `booth setup --events --check` | `{"event":"setup_status","ready":false,"missing":["sidon-venv",…],"bytes_total":N}` |
+| `booth setup --events --check` | `{"event":"setup_status","ready":false,"missing":["sidon-weights",…],"bytes_total":N}` |
 | `booth setup --events` | `setup` events (about 4 per second) with `phase`, `label`, `bytes_done`, `bytes_total`, `eta` and an overall `progress` (0–1, which also moves while the Sidon environment installs and no bytes are counted), then `done` or `error` |
 | `booth enhance IN --events --stems-dir DIR -o OUT --engine sidon\|mossformer2\|df3 [--no-split] [--audio-only] -s 54 -b 10 -m 10` | `hello`, `start`, `progress` (about 4 per second, never goes backwards), then `done` or `error` |
 | `booth remix DIR -s S -b B -m M --events [-o OUT]` | `hello`, `progress`, then `done` or `error`. It renders the output again from the stems at a new mix. |

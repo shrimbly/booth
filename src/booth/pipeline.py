@@ -121,7 +121,7 @@ def _restore_sidon(src: np.ndarray, vocals: np.ndarray, log,
     from .engines import sidon
     key = deepfilter.enhance(vocals, A.SR)
     log(f"  restoring voice with Sidon (~{len(src) / A.SR * 0.3:.0f}s)…")
-    restored = sidon.enhance(src, A.SR, log=log, on_progress=report.signal)
+    restored = sidon.enhance(src, A.SR, on_progress=report.signal)
     lag = dsp.envelope_lag(src, restored, A.SR)
     restored = dsp.shift(restored, lag)
     if abs(lag) > A.SR // 1000:          # only worth mentioning above 1 ms

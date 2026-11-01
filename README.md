@@ -32,7 +32,7 @@ $ booth interview.mp4 podcast.wav
 
 - macOS 14 (Sonoma) or later on Apple silicon, with 16 GB of memory or more. The voice model needs
   about 12 GB while it works, however long the recording.
-- About 3 GB of disk space for the voice models and the engine, downloaded on first use.
+- About 2 GB of disk space for the voice models and the engine, downloaded on first use.
 - [ffmpeg](https://ffmpeg.org), to read and write audio and video. Booth uses yours if you have
   one, and otherwise downloads its own during setup (57 MB).
 
@@ -294,8 +294,8 @@ DEMO_POSTER=still.jpg site/tools/make-demo-video.sh
 ## License
 
 MIT; see [LICENSE](LICENSE). Booth.app also carries uv (MIT or Apache 2.0), the Geist Serif
-typeface (SIL Open Font License) and Silero VAD's speech detector (MIT). The engine downloads
-these models under their own licenses: Sidon and w2v-BERT 2.0 (MIT), Demucs (MIT), DeepFilterNet
-(MIT or Apache 2.0) and ClearVoice MossFormer2 (Apache 2.0), and on a Mac without ffmpeg, a build
+typeface (SIL Open Font License), Silero VAD's speech detector (MIT) and DeepFilterNet3 (MIT or
+Apache 2.0). The engine downloads these models under their own licenses: Sidon and w2v-BERT 2.0
+(MIT), Demucs (MIT) and ClearVoice MossFormer2 (Apache 2.0), and on a Mac without ffmpeg, a build
 of FFmpeg (GPL 3.0). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and the
 app has a copy of it and of `LICENSE` in `Contents/Resources`.

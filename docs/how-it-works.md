@@ -18,16 +18,16 @@ from them. It rebuilds harmonics and bandwidth instead of masking noise, which
 is where the clarity comes from. Discriminative denoisers (MossFormer2,
 DeepFilterNet) can only subtract noise, so they sound muffled.
 
-Sidon runs in its own Python environment, `~/.cache/booth/sidon-venv`,
-because it needs a newer torch and transformers than the rest of the engine.
-Every package in it is pinned to an exact version, and the Sidon and w2v-BERT
-files are pinned to exact Hugging Face commits, so an upstream release can't
-change the results below. Setup also checks the downloaded DeepFilterNet3
-files against the SHA-256 hashes of the tested copy. The environment counts as
-installed only once its install has finished and its packages import. Setup
-rebuilds it from scratch if an install was interrupted or failed, or if the
-pins changed. An environment set up before this check is kept as long as every
-pinned package is fully installed.
+Sidon, Demucs and the rest of the engine share one Python environment. torch,
+transformers and huggingface_hub are pinned to the versions Sidon was tested
+with, `uv.lock` pins every other package, and the Sidon and w2v-BERT files are
+pinned to exact Hugging Face commits, so an upstream release can't change the
+results below. Sidon runs in a child process, so the memory it holds while it
+works goes back to the system when it finishes. DeepFilterNet3 ships with the
+engine as `data/deepfilternet3.onnx`, exported from its checkpoint by
+`scripts/export-deepfilternet3.py`, and runs on onnxruntime with numpy doing
+the signal processing around the network; its output matches the PyTorch model
+to float rounding (−106 dB or less).
 
 Measured against Adobe Podcast Enhance v2 on four real recordings (30 s clips,
 three held out from all earlier calibration; `scripts/bench.py`):

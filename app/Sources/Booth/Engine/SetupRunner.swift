@@ -8,7 +8,7 @@ import Foundation
 /// (`setup_failed`).
 ///
 /// It never installs when the last search stopped at an engine that didn't answer: that engine
-/// exists (macOS may be holding it at a folder prompt), and a ~600 MB install would bury it. It
+/// exists (macOS may be holding it at a folder prompt), and a ~950 MB install would bury it. It
 /// asks that engine again instead, which is what Try again after that failure needs. A Mac
 /// without ffmpeg needs nothing more: the engine's setup downloads one along with the models.
 @MainActor

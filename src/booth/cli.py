@@ -178,7 +178,6 @@ def _quiet_libraries() -> None:
     # Public models don't need a token; huggingface_hub warns anyway.
     os.environ.setdefault("HF_HUB_VERBOSITY", "error")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    warnings.filterwarnings("ignore", message=r".*torchaudio\.backend\.common.*")
     warnings.filterwarnings("ignore", category=FutureWarning)
 
 

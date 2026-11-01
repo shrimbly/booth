@@ -307,9 +307,9 @@ def _check_writable(finals: list[Path]) -> None:
 def _needed(args: Namespace) -> set[str]:
     """The setup items this run reads."""
     if args.engine == "sidon":
-        need = {"ffmpeg", "sidon-venv", "sidon-weights", "w2v-bert", "df3"}
+        need = {"ffmpeg", "sidon-weights", "w2v-bert"}
     else:
-        need = {"ffmpeg", "df3"}
+        need = {"ffmpeg"}
     if not args.no_split:
         need.add("htdemucs")
     return need
