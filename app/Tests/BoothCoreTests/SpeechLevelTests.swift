@@ -99,4 +99,56 @@ struct SpeechLevelTests {
         #expect(SpeechLevel(sampleRate: 44_100).frameLength == 2205)
         #expect(SpeechLevel(sampleRate: 48_000).frameLength == 2400)
     }
+
+    @Test func blocksOfSamplesAddUpExactlyLikeSingleSamples() {
+        // A deterministic pair with a trailing partial frame, fed in uneven blocks.
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func next() -> Float {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(Int64(bitPattern: seed >> 11) % 20_000) / 40_000
+        }
+        let count = 48_000 * 3 + 1234
+        let clean = (0..<count).map { _ in next() }
+        let vocals = (0..<count).map { _ in next() }
+        let single = SpeechLevel(clean: clean, vocals: vocals, sampleRate: 48_000)
+        var blocks = SpeechLevel(sampleRate: 48_000)
+        clean.withUnsafeBufferPointer { c in
+            vocals.withUnsafeBufferPointer { v in
+                var start = 0
+                for size in [1, 999, 2400, 7, 50_000, count] {
+                    let end = min(count, start + size)
+                    blocks.add(clean: UnsafeBufferPointer(rebasing: c[start..<end]), vocals: UnsafeBufferPointer(rebasing: v[start..<end]))
+                    start = end
+                }
+            }
+        }
+        #expect(blocks == single)
+        #expect(blocks.frameCount == 60)
+    }
+
+    @Test func quantileBySelectionIsTheSortedOne() {
+        var seed: UInt64 = 42
+        for size in [1, 2, 3, 10, 101, 3000] {
+            for _ in 0..<20 {
+                let values = (0..<size).map { _ -> Double in
+                    seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                    return Double((seed >> 33) % 50) - 25 // plenty of ties
+                }
+                for q in [0, 0.25, SpeechLevel.quantile, 0.999, 1] {
+                    #expect(SpeechLevel.numpyQuantile(unsorted: values, q) == SpeechLevel.numpyQuantile(values.sorted(), q))
+                }
+            }
+        }
+    }
+
+    /// One smooth rise and fall, which middle pivots alone take in quadratic time.
+    @Test func quantileBySelectionOnOneSmoothHill() {
+        let count = 72_000
+        let hill = (0..<count).map { Double(min($0, count - 1 - $0)) / 100 }
+        let started = ContinuousClock.now
+        for q in [0, 0.5, SpeechLevel.quantile, 1] {
+            #expect(SpeechLevel.numpyQuantile(unsorted: hill, q) == SpeechLevel.numpyQuantile(hill.sorted(), q))
+        }
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
 }

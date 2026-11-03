@@ -439,11 +439,31 @@ final class RecordingWorkspace: WorkspaceActing {
     /// What the next open panel "returns".
     var nextChoice: [URL] = []
     private(set) var revealed: [[URL]] = []
+    private(set) var opened: [URL] = []
     private(set) var terminateCount = 0
 
     func chooseMediaFiles(completion: @escaping @MainActor ([URL]) -> Void) { completion(nextChoice) }
     func reveal(_ urls: [URL]) { revealed.append(urls) }
+    func open(_ url: URL) { opened.append(url) }
     func terminate() { terminateCount += 1 }
+}
+
+/// Answers update checks with `answer`, a release or an error, after `delay`.
+final class FixedUpdates: UpdateChecking {
+    var answer: Result<Release, Error>
+    var delay: Duration
+    private(set) var checks = 0
+
+    init(_ answer: Result<Release, Error>, delay: Duration = .zero) {
+        self.answer = answer
+        self.delay = delay
+    }
+
+    func latestRelease() async throws -> Release {
+        checks += 1
+        if delay > .zero { try await Task.sleep(for: delay) }
+        return try answer.get()
+    }
 }
 
 /// Reports the same video traits for every file (nil: no video anywhere).

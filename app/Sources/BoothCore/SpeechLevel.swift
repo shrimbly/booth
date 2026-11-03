@@ -69,6 +69,39 @@ public struct SpeechLevel: Equatable, Sendable {
         }
     }
 
+    /// Feeds the next samples of both stems: the same sums, added in the same order, as calling
+    /// `add(clean:vocals:)` for each pair, without its per-sample overhead. Extra samples of the
+    /// longer one are ignored.
+    public mutating func add(clean: UnsafeBufferPointer<Float>, vocals: UnsafeBufferPointer<Float>) {
+        let count = min(clean.count, vocals.count)
+        var index = 0
+        while index < count {
+            let end = index + min(frameLength - filled, count - index)
+            var sumCC = partialCC, sumVV = partialVV, sumCV = partialCV
+            for i in index..<end {
+                let c = Double(clean[i]), v = Double(vocals[i])
+                sumCC += c * c
+                sumVV += v * v
+                sumCV += c * v
+            }
+            filled += end - index
+            index = end
+            if filled == frameLength {
+                cc.append(sumCC)
+                vv.append(sumVV)
+                cv.append(sumCV)
+                partialCC = 0
+                partialVV = 0
+                partialCV = 0
+                filled = 0
+            } else {
+                partialCC = sumCC
+                partialVV = sumVV
+                partialCV = sumCV
+            }
+        }
+    }
+
     /// `dsp.active_speech_db(s·clean + (1−s)·vocals)`; nil without a whole frame.
     public func activeSpeechDB(speechGain s: Double) -> Double? {
         guard !cc.isEmpty else { return nil }
@@ -79,7 +112,7 @@ public struct SpeechLevel: Equatable, Sendable {
             let energy = max(0, a * cc[k] + b * cv[k] + c * vv[k])
             db[k] = 20 * log10((energy / n).squareRoot() + 1e-12)
         }
-        let threshold = Self.numpyQuantile(db.sorted(), Self.quantile)
+        let threshold = Self.numpyQuantile(unsorted: db, Self.quantile)
         var sum = 0.0
         var count = 0
         for value in db where value >= threshold {
@@ -114,16 +147,72 @@ public struct SpeechLevel: Equatable, Sendable {
         voiceDB < floorDB ? 0 : min(targetDB - voiceDB, maxGainDB)
     }
 
-    /// `np.quantile(a, q)` with the default linear method, on sorted values, including numpy's
-    /// two-sided lerp so threshold ties land on the same side.
+    /// `np.quantile(a, q)` with the default linear method, on sorted values.
     static func numpyQuantile(_ sorted: [Double], _ q: Double) -> Double {
-        guard let last = sorted.indices.last else { return .nan }
+        numpyQuantile(count: sorted.count, q) { lower, upper in (sorted[lower], sorted[upper]) }
+    }
+
+    /// `numpyQuantile(values.sorted(), q)` without the sort, for every Speech setting tried. It
+    /// reads only two order statistics, found here by selection in O(n) rather than O(n log n),
+    /// so the result is the very same.
+    static func numpyQuantile(unsorted values: [Double], _ q: Double) -> Double {
+        numpyQuantile(count: values.count, q) { lower, upper in
+            var work = values
+            let a = select(&work, lower)
+            // Selection leaves nothing smaller than `a` after it, so the next order statistic is
+            // the smallest there.
+            return (a, upper == lower ? a : work[upper...].min() ?? a)
+        }
+    }
+
+    /// numpy's linear method over `count` values, given the order statistics it reads (the
+    /// `lower`-th and `upper`-th smallest), including its two-sided lerp so threshold ties land
+    /// on the same side.
+    private static func numpyQuantile(
+        count: Int, _ q: Double, orderStatistics: (_ lower: Int, _ upper: Int) -> (Double, Double)
+    ) -> Double {
+        guard count > 0 else { return .nan }
+        let last = count - 1
         let position = q * Double(last)
         let lower = Int(position.rounded(.down))
         let upper = min(lower + 1, last)
         let t = position - Double(lower)
-        let a = sorted[lower], b = sorted[upper]
+        let (a, b) = orderStatistics(lower, upper)
         let difference = b - a
         return t >= 0.5 ? b - difference * (1 - t) : a + difference * t
+    }
+
+    /// Quickselect with Hoare's partition: afterwards `values[k]` is the k-th smallest, with
+    /// nothing larger before it and nothing smaller after it. Middle pivots can go quadratic (on
+    /// one smooth rise and fall, say), so after 2·log2(n) rounds it sorts what is left instead.
+    private static func select(_ values: inout [Double], _ k: Int) -> Double {
+        var left = 0, right = values.count - 1
+        var rounds = 2 * (Int.bitWidth - values.count.leadingZeroBitCount)
+        while left < right {
+            guard rounds > 0 else {
+                values[left...right].sort()
+                break
+            }
+            rounds -= 1
+            let pivot = values[(left + right) / 2]
+            var i = left, j = right
+            while i <= j {
+                while values[i] < pivot { i += 1 }
+                while values[j] > pivot { j -= 1 }
+                if i <= j {
+                    values.swapAt(i, j)
+                    i += 1
+                    j -= 1
+                }
+            }
+            if k <= j {
+                right = j
+            } else if k >= i {
+                left = i
+            } else {
+                break
+            }
+        }
+        return values[k]
     }
 }

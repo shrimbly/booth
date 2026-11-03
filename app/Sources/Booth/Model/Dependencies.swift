@@ -168,7 +168,27 @@ protocol WorkspaceActing: AnyObject {
     /// An open panel for audio and movie files, multiple selection. Cancel → `[]`.
     func chooseMediaFiles(completion: @escaping @MainActor ([URL]) -> Void)
     func reveal(_ urls: [URL])
+    /// Opens a web address in the default browser.
+    func open(_ url: URL)
     func terminate()
+}
+
+/// Asks where Booth's releases are published for the newest one (Settings → Updates). Only
+/// ever on request: Booth doesn't go online by itself.
+@MainActor
+protocol UpdateChecking: AnyObject {
+    /// The latest published release. Throws when it can't be asked or the answer isn't one.
+    func latestRelease() async throws -> Release
+}
+
+/// Never finds anything newer: the default for tests and snapshots.
+final class NoUpdates: UpdateChecking {
+    /// Nonisolated, so it can be `SystemServices`' default.
+    nonisolated init() {}
+
+    func latestRelease() async throws -> Release {
+        Release(version: AppInfo.version, download: UpdateCheck.latestRelease)
+    }
 }
 
 /// What a video file looks like, for the Done screen's picture.
@@ -194,6 +214,7 @@ struct SystemServices {
     var loginItem: LoginItemControlling
     var workspace: WorkspaceActing
     var video: VideoInspecting = NoVideoInspector()
+    var updates: UpdateChecking = NoUpdates()
 }
 
 struct AppDependencies {

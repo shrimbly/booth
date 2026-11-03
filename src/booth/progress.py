@@ -45,25 +45,29 @@ class Cost:
         return self.fixed + self.per_second * duration
 
 
-# Measured on an M-series CPU with 8, 30 and 90 s speech clips. Whole sidon
-# pipeline ≈ 0.6x realtime, demucs and Sidon about 40 % each on long files.
+# Measured on an M5 Pro (18 cores) with speech clips of 8 s to 5 min and a
+# 3 min video, models in the page cache. The whole sidon pipeline takes about
+# 0.2x realtime: demucs about 40 % of it, Sidon most of the rest. Sidon's
+# runner loads its models while demucs runs, so their load ("load.sidon")
+# counts only when there is no demucs to hide it (--no-split).
 DEFAULT_COSTS: dict[str, Cost] = {
-    "decode": Cost(0.03, 0.002),
-    "separate": Cost(2.0, 0.42),
-    "restore.sidon": Cost(3.5, 0.23),
+    "decode": Cost(0.03, 0.0003),
+    "separate": Cost(1.5, 0.075),
+    "load.sidon": Cost(1.3, 0.0),
+    "restore.sidon": Cost(0.3, 0.112),
     "restore.mossformer2": Cost(2.2, 0.05),     # warm uv env; the first run builds it
-    "restore.df3": Cost(0.40, 0.027),
-    "cleanup.sidon": Cost(0.05, 0.007),
+    "restore.df3": Cost(0.06, 0.0052),
+    "cleanup.sidon": Cost(0.05, 0.0065),
     "cleanup.mossformer2": Cost(0.03, 0.008),
-    "cleanup.df3": Cost(0.03, 0.008),
-    "write": Cost(0.03, 0.002),
-    "write.remux": Cost(0.15, 0.005),
-    "write.stems": Cost(0.02, 0.005),
-    "remix": Cost(0.08, 0.004),
+    "cleanup.df3": Cost(0.08, 0.0087),
+    "write": Cost(0.01, 0.0004),
+    "write.remux": Cost(0.15, 0.018),
+    "write.stems": Cost(0.005, 0.0005),
+    "remix": Cost(0.02, 0.0004),
 }
 
 # After Sidon's last chunk: decode its output, align, tone-correct.
-_SIDON_TAIL = Cost(0.2, 0.012)
+_SIDON_TAIL = Cost(0.15, 0.003)
 
 
 def cost_key(stage: str, engine: str) -> str:
@@ -93,7 +97,7 @@ class SpeedBook:
     """Per-stage correction factors learned from finished runs (EMA), on disk."""
 
     ALPHA = 0.35
-    VERSION = 1
+    VERSION = 2                 # 2: costs refit for the overlapped, faster pipeline
 
     def __init__(self, path: Path | None = None):
         self.path = path or CACHE_DIR / "speed.json"
@@ -311,6 +315,8 @@ def plan_enhance(*, duration: float, engine: str, split: bool, video: bool,
             continue
         key = cost_key(stage, engine)
         base = DEFAULT_COSTS[key].seconds(duration)
+        if key == "restore.sidon" and not split:
+            base += DEFAULT_COSTS["load.sidon"].seconds(duration)
         if stage == "write":
             if video:
                 base += DEFAULT_COSTS["write.remux"].seconds(duration)

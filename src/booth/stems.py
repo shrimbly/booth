@@ -14,12 +14,14 @@ at any mix as s_eff·clean + (1−s_eff)·vocals + b_eff·background + m_eff·mu
 
 All previews are 48 kHz mono float32 and are written unclipped: `remix`
 renders from them, so they must hold exactly what the pipeline mixed. The
-pipeline's previews are computed one at a time as they are written, so a long
-input never holds all five in memory at once.
+pipeline's previews are computed one at a time as they are written, and
+`remix` reads them back a block at a time, so a long input never holds all
+five in memory at once.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections.abc import Callable, Iterator
@@ -36,26 +38,11 @@ from .events import PROTOCOL
 MANIFEST = "manifest.json"
 BAR_BINS = 56
 STEM_NAMES = ("clean", "vocals", "background", "music", "original")
+REQUIRED = ("clean", "vocals", "background", "original")     # music only when detected
 
 
 def preview_file(name: str) -> str:
     return f"preview_{name}.wav"
-
-
-@dataclass
-class Previews:
-    clean: np.ndarray
-    vocals: np.ndarray
-    background: np.ndarray
-    music: np.ndarray | None
-    original: np.ndarray
-    gain: float
-
-    def items(self) -> list[tuple[str, np.ndarray]]:
-        signals = [("clean", self.clean), ("vocals", self.vocals),
-                   ("background", self.background), ("music", self.music),
-                   ("original", self.original)]
-        return [(name, sig) for name, sig in signals if sig is not None]
 
 
 @dataclass
@@ -149,7 +136,7 @@ def outputs(wav: Path, video: Path | None) -> dict:
             "video": str(Path(video).resolve()) if video else None}
 
 
-def write_stems_dir(directory: Path, previews: Previews | PendingPreviews, fields: dict) -> None:
+def write_stems_dir(directory: Path, previews: PendingPreviews, fields: dict) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     # The manifest is written last: its presence means the directory is complete.
     (directory / MANIFEST).unlink(missing_ok=True)
@@ -184,18 +171,32 @@ def read_manifest(directory: Path) -> dict:
     return data
 
 
-def load_previews(directory: Path, data: dict) -> Previews:
-    def read(name: str) -> np.ndarray | None:
-        path = directory / preview_file(name)
-        if not path.exists():
-            return None
-        x, sr = sf.read(str(path), dtype="float32")
-        if sr != A.SR:
-            raise ValueError(f"{path.name} is {sr} Hz, expected {A.SR}")
-        return x
-
-    signals = {name: read(name) for name in STEM_NAMES}
-    for name in ("clean", "vocals", "background", "original"):
-        if signals[name] is None:
+def check_previews(directory: Path) -> int:
+    """The previews' length in samples. Raises FileNotFoundError if one that
+    every render writes is missing."""
+    for name in REQUIRED:
+        if not (directory / preview_file(name)).exists():
             raise FileNotFoundError(f"{preview_file(name)} is missing from {directory}")
-    return Previews(gain=float(data["preview_gain"]), **signals)
+    return sf.info(str(directory / preview_file("clean"))).frames
+
+
+def read_blocks(directory: Path, names: tuple[str, ...],
+                n: int) -> Iterator[tuple[int, list[np.ndarray | None]]]:
+    """The named previews, each n samples long, side by side dsp.BLOCK samples
+    at a time: yields (start, blocks), with None for a preview that wasn't written."""
+    with contextlib.ExitStack() as stack:
+        files = []
+        for name in names:
+            path = directory / preview_file(name)
+            if not path.exists():
+                files.append(None)
+                continue
+            f = stack.enter_context(sf.SoundFile(str(path)))
+            if f.samplerate != A.SR:
+                raise ValueError(f"{path.name} is {f.samplerate} Hz, expected {A.SR}")
+            if f.frames != n:
+                raise ValueError(f"{path.name} holds {f.frames} samples, expected {n}")
+            files.append(f)
+        for a in range(0, n, dsp.BLOCK):
+            k = min(dsp.BLOCK, n - a)
+            yield a, [None if f is None else f.read(k, dtype="float32") for f in files]

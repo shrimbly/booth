@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
+import itertools
+import os
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
+
+# Segments separated at once on the CPU. Each runs its own team of torch threads
+# (one per performance core by default), so a second only pays with cores to
+# spare: on 18 cores, 150 s of audio takes 11 s instead of 17 s, for ~1 GB more
+# memory (a second set of activations).
+_WORKERS = 2 if (os.cpu_count() or 1) >= 10 else 1
 
 _model = None
 
@@ -14,14 +26,9 @@ def split_music(audio: np.ndarray, sr: int, device: str = "cpu",
     accompaniment is computed as the exact complement (audio - vocals) so the
     decomposition reconstructs the input perfectly.
     """
-    global _model
     import torch
-    from demucs import pretrained
 
-    if _model is None:
-        _model = pretrained.get_model("htdemucs")
-        _model.eval()
-    model = _model
+    model = _load_model()
     msr = model.samplerate  # 44100
 
     x = torch.from_numpy(np.asarray(audio, dtype=np.float32))[None]   # [1, T]
@@ -37,17 +44,21 @@ def split_music(audio: np.ndarray, sr: int, device: str = "cpu",
     mix_n = ((x44 - mean) / std).expand(2, -1)[None]
     del x44
 
+    # MPS is ~2.5x faster but stays opt-in: it rounds differently from the CPU (vocals
+    # ~6e-7 apart), and on torch 2.2 1-4% of its segment passes varied run to run.
     dev = device
     if device == "auto":
         dev = "mps" if torch.backends.mps.is_available() else "cpu"
-    try:
+    if dev == "cpu":
         with torch.no_grad():
-            voc44 = _vocals(model, mix_n, mean, std, dev, progress)
-    except Exception:
-        if dev == "cpu":
-            raise
-        with torch.no_grad():  # MPS can lack ops depending on torch version — fall back
             voc44 = _vocals(model, mix_n, mean, std, "cpu", progress)
+    else:
+        try:
+            with torch.no_grad(), _on_mps(model):
+                voc44 = _vocals(model, mix_n, mean, std, dev, progress)
+        except Exception:
+            with torch.no_grad():  # MPS can lack ops depending on torch version — fall back
+                voc44 = _vocals(model, mix_n, mean, std, "cpu", progress)
     del mix_n
     voc = _resample(voc44, msr, sr).squeeze(0).numpy()
     del voc44
@@ -58,6 +69,104 @@ def split_music(audio: np.ndarray, sr: int, device: str = "cpu",
     voc = voc[:len(audio)].astype(np.float32, copy=False)
     accomp = (audio - voc).astype(np.float32, copy=False)
     return voc, accomp
+
+
+def _load_model():
+    """htdemucs, loaded once per process and adapted in place for split_music."""
+    global _model
+    if _model is None:
+        from demucs import pretrained
+        from demucs.apply import BagOfModels
+
+        model = pretrained.get_model("htdemucs")
+        model.eval()
+        subs = list(model.models) if isinstance(model, BagOfModels) else [model]
+        _route_conv1d_off_nnpack(subs)
+        if len(subs) == 1:      # apply_model combines a bag's models source by source
+            _keep_vocals(subs[0])
+        _model = model
+    return _model
+
+
+def _route_conv1d_off_nnpack(models) -> None:
+    """Compute the models' large-batch Conv1d calls as batch-1 conv2d.
+
+    htdemucs's frequency-branch DConv layers run Conv1d over [batch * freq, C, T]:
+    batches of 512, 128 and 32 with 6-384 channels and 1 or 3 taps. torch's CPU
+    convolution (no MKLDNN in this build) sends the undilated ones to NNPACK,
+    whose FFT tiles are slow for kernels this small: 0.45 s of a 1.06 s segment
+    pass. The same convolution as one batch-1 conv2d over [1, C, batch * freq, T]
+    with a (1, k) kernel takes the im2col + BLAS path in 0.05 s; the dilated ones,
+    which were never NNPACK's, also gain from the single GEMM. torch's own switch
+    for NNPACK is process-wide, hence the per-module route. Same math in float32,
+    rounded differently: vocals move by at most ~7e-7 (128 dB), and are as close
+    to a float64 run as before (125-128 dB on a segment either way).
+    """
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+    class Batch1Conv1d(nn.Conv1d):
+        def forward(self, x):
+            if x.device.type != "cpu" or x.dim() != 3 or x.shape[0] < 16:
+                return super().forward(x)          # NNPACK only takes batches >= 16
+            y = F.conv2d(x.transpose(0, 1)[None], self.weight[:, :, None], self.bias,
+                         (1, self.stride[0]), (0, self.padding[0]), (1, self.dilation[0]),
+                         self.groups)
+            return y[0].transpose(0, 1).contiguous()
+
+    for model in models:
+        for m in model.modules():
+            if (type(m) is nn.Conv1d and m.padding_mode == "zeros"
+                    and not isinstance(m.padding, str)):
+                m.__class__ = Batch1Conv1d
+
+
+def _keep_vocals(model) -> None:
+    """Make an HTDemucs compute only its vocals.
+
+    Its last frequency and time layers are transposed convolutions with no norm
+    or activation after them, and their output channels are grouped by source.
+    With complex-as-channels output (no Wiener filter mixing the sources) every
+    step after them is per source, so keeping the vocals' channels gives the same
+    vocals, bit for bit, without the other sources' last layers and inverse STFTs.
+    """
+    import torch.nn as nn
+    from demucs.hdemucs import HDecLayer
+    from demucs.htdemucs import HTDemucs
+
+    if not isinstance(model, HTDemucs) or not model.cac:
+        return
+    last = (model.decoder[-1], model.tdecoder[-1])
+    if not all(isinstance(layer, HDecLayer) and layer.last and layer.conv_tr.groups == 1
+               and isinstance(layer.norm2, nn.Identity) for layer in last):
+        return
+    idx = model.sources.index("vocals")
+    for layer in last:
+        ct = layer.conv_tr
+        per = ct.out_channels // len(model.sources)
+        keep = slice(idx * per, (idx + 1) * per)
+        ct.weight = nn.Parameter(ct.weight.detach()[:, keep].clone(), requires_grad=False)
+        ct.bias = nn.Parameter(ct.bias.detach()[keep].clone(), requires_grad=False)
+        ct.out_channels = per
+    model.sources = ["vocals"]          # a new list: a bag shares the old one, all four sources
+
+
+@contextlib.contextmanager
+def _on_mps(model):
+    """Feed the GPU from one CPU thread, and give its memory back afterwards."""
+    import torch
+
+    threads = torch.get_num_threads()
+    # The CPU only feeds the GPU and runs the STFTs here: one thread keeps up, and
+    # more only cost CPU time.
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+        # empty_cache can't free the heap the weights sit in (~190 MB) while they're on it.
+        model.to("cpu")
+        torch.mps.empty_cache()
 
 
 def _resample(x, old_sr: int, new_sr: int, block_frames: int = 1 << 14):
@@ -92,10 +201,10 @@ def _vocals(model, mix_n, mean, std, device, progress: bool):
     overlap=0.25), de-normalized and averaged to mono: [1, T].
 
     apply_model accumulates every source of every segment into whole-file
-    tensors. This runs the same segments in the same order with the same
-    triangular weights, but keeps only the vocals and only the segment-long
-    window that is still receiving contributions, so memory does not grow with
-    the input. Bags of several models take apply_model's own path.
+    tensors. This runs the same segments with the same triangular weights and
+    adds them up in the same order, but keeps only the vocals and only the
+    segment-long window that is still receiving contributions, so memory does
+    not grow with the input. Bags of several models take apply_model's own path.
     """
     import torch
     from demucs.apply import BagOfModels, TensorChunk, apply_model
@@ -111,6 +220,7 @@ def _vocals(model, mix_n, mean, std, device, progress: bool):
     else:
         sub, inst_weight = model, 1.0
     total_weight = 0.0 + inst_weight
+    oidx = sub.sources.index("vocals")      # 0 once _keep_vocals has trimmed the model
     sub.to(device)
     sub.eval()
     channels, length = mix_n.shape[1], mix_n.shape[-1]
@@ -119,11 +229,6 @@ def _vocals(model, mix_n, mean, std, device, progress: bool):
     weight = torch.cat([torch.arange(1, seg // 2 + 1, device=device),
                         torch.arange(seg - seg // 2, 0, -1, device=device)])
     weight = (weight / weight.max()) ** 1.0
-    offsets = range(0, length, stride)
-    if progress:
-        import tqdm
-        offsets = tqdm.tqdm(offsets, unit_scale=float(format(stride / sub.samplerate, ".2f")),
-                            ncols=120, unit="seconds")
 
     voc = torch.empty(1, length)
     acc = torch.zeros(1, channels, seg + stride)          # covers [start, start + seg + stride)
@@ -146,12 +251,38 @@ def _vocals(model, mix_n, mean, std, device, progress: bool):
         acc_w = torch.cat([acc_w[n:], torch.zeros(n)])
         start = upto
 
-    for offset in offsets:
-        finalize(offset)
-        chunk_out = apply_model(sub, TensorChunk(mix_n, offset, seg), shifts=0, split=False,
-                                overlap=0.25, device=device)
-        n = chunk_out.shape[-1]
-        acc[..., :n] += (weight[:n] * chunk_out[:, vidx]).to(acc.device)
-        acc_w[:n] += weight[:n].to(acc.device)
+    def separate(offset: int):
+        with torch.no_grad():                               # grad mode is per thread
+            return apply_model(sub, TensorChunk(mix_n, offset, seg), shifts=0, split=False,
+                               overlap=0.25, device=device)
+
+    # Like demucs's own num_workers, run segments on a thread pool; they are still
+    # added up one at a time in order, so the result doesn't depend on the count.
+    offsets = range(0, length, stride)
+    workers = _WORKERS if device == "cpu" else 1
+    with contextlib.closing(_ordered_map(separate, offsets, workers)) as outs:
+        if progress:
+            import tqdm
+            outs = tqdm.tqdm(outs, total=len(offsets), ncols=120, unit="seconds",
+                             unit_scale=float(format(stride / sub.samplerate, ".2f")))
+        for offset, chunk_out in zip(offsets, outs, strict=True):
+            finalize(offset)
+            n = chunk_out.shape[-1]
+            acc[..., :n] += (weight[:n] * chunk_out[:, oidx]).to(acc.device)
+            acc_w[:n] += weight[:n].to(acc.device)
     finalize(length)
     return voc
+
+
+def _ordered_map(fn, items, workers: int):
+    """Yield fn(item) for each of items in order, computing up to `workers` at once."""
+    if workers <= 1:
+        yield from map(fn, items)
+        return
+    items = iter(items)
+    with ThreadPoolExecutor(workers) as pool:
+        pending = deque(pool.submit(fn, item) for item in itertools.islice(items, workers))
+        while pending:
+            result = pending.popleft().result()
+            pending.extend(pool.submit(fn, item) for item in itertools.islice(items, 1))
+            yield result

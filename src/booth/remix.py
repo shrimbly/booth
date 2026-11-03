@@ -49,18 +49,24 @@ def remix(directory: Path, speech: float | None = None, background: float | None
     finals = [vid_out, wav_out] if wants_video else [wav_out]
     refuse_overwriting_input(inp, finals)
 
-    previews = stems.load_previews(directory, data)
+    n = stems.check_previews(directory)
     s, b, m = mix_coefficients(speech, background, music, settings["linear"])
-    voice = (s * previews.clean + (1 - s) * previews.vocals).astype(np.float32)
+    # The previews are read a block at a time; each block's sums are worked out
+    # as the whole-signal ones were, so only the voice and the mix are held whole.
+    voice = np.empty(n, np.float32)
+    for a, (clean, vocals) in stems.read_blocks(directory, ("clean", "vocals"), n):
+        voice[a:a + len(clean)] = s * clean + (1 - s) * vocals
     if settings["level"]:
         voice = dsp.level_voice(voice, A.SR)     # scale-invariant: fine on G0-scaled stems
-    mix = voice + b * previews.background
-    if previews.music is not None:
-        mix = mix + m * previews.music
     # Undo the preview gain so gain staging sees exactly what enhance saw.
-    g0 = previews.gain
-    voice = (voice / g0).astype(np.float32)
-    mix = (mix / g0).astype(np.float32)
+    g0 = float(data["preview_gain"])
+    mix = np.empty(n, np.float32)
+    for a, (bg, mu) in stems.read_blocks(directory, ("background", "music"), n):
+        blk = voice[a:a + len(bg)] + b * bg
+        if mu is not None:
+            blk = blk + m * mu
+        mix[a:a + len(blk)] = blk / g0
+    voice /= g0
 
     log(f"remix: speech {speech:g}%  background {background:g}%  music {music:g}%")
     wav_out.parent.mkdir(parents=True, exist_ok=True)

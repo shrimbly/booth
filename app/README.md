@@ -20,10 +20,10 @@ new mix saves in a few seconds. **Done** takes you back to the drop zone.
   Otherwise Booth installs its own engine the first time it runs. For that it needs `uv` (the build
   bundles the copy on your `PATH` when there is one) and a network connection for about 1.1 GB of
   models.
-- `ffmpeg` and `ffprobe` for every file, audio or video (`brew install ffmpeg` installs both). Booth
-  looks in the `PATH` it was started with, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`,
-  `~/.cargo/bin`, and then asks your login shell. Without them, setup stops before it installs the
-  engine.
+- `ffmpeg` and `ffprobe` for every file, audio or video. Booth looks in the `PATH` it was started
+  with, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.cargo/bin`, and then asks your
+  login shell. Without them, setup downloads a static build of both into `~/.cache/booth/bin`
+  (57 MB), which comes last on the engine's `PATH`, so an ffmpeg you install later takes over.
 
 ## Build, run, install
 
@@ -200,6 +200,8 @@ a terminal; Finder and `open` don't pass them on.
   - **Keep the original video.** When it's off, Booth writes audio only.
   - **Skip music separation.** This is faster, but the Music slider goes away.
   - **Open at login.** This only takes effect when Booth is in `/Applications` or `~/Applications`.
+  - **Updates: Check now** asks GitHub for the latest release of Booth. When it's newer than yours,
+    **Download** opens its disk image in your browser. Booth only checks when you click.
 
 ## The engine
 
@@ -230,10 +232,10 @@ last install didn't finish. The search stops there and setup updates it (see bel
 Booth creates the managed install only when every candidate is missing or broken. An engine that
 is slow to answer doesn't count as broken. These are the steps:
 
-1. It checks that it can find `ffmpeg` and `ffprobe`. If it can't, setup stops with "Booth needs
-   ffmpeg", before anything is downloaded.
+1. It looks for uv, and for `ffmpeg` and `ffprobe` (step 4 downloads those two if they're missing).
 2. It copies `Booth.app/Contents/Resources/engine` to `~/Library/Application Support/Booth/engine`.
-3. It runs `uv sync --frozen --python 3.11` there, with the bundled uv or the system's.
+3. It runs `uv sync --frozen --python 3.11` there, with the bundled uv or the system's. Then it
+   deletes `~/.cache/booth/sidon-venv`, the separate environment earlier versions ran Sidon in.
 4. It runs `booth setup --events`.
 
 The same steps update the managed install after you upgrade Booth. The copy keeps `.venv`, so
@@ -248,10 +250,10 @@ If an engine passes the check but reports `ready: false`, Booth runs only
 
 Setup downloads these, about 1.1 GB in total (the engine reports the exact figure, which the popover shows):
 
-- the Sidon environment (`~/.cache/booth/sidon-venv`)
 - the Sidon weights and the w2v-BERT preprocessor
 - htdemucs
-- DeepFilterNet3
+- ffmpeg and ffprobe, only when they aren't installed: Martin Riedl's static build of FFmpeg 9.0.2,
+  checked against pinned SHA-256 hashes
 
 The popover shows the progress. **Run in background** closes the popover while setup continues.
 Files you drop in the meantime wait in the queue and start when setup finishes.
@@ -265,7 +267,7 @@ to stderr, which Booth copies to its log. Each side ignores keys and events it d
 | Command | Output |
 |---|---|
 | `booth app-info` | One `info` line, fast (no torch import): `{"event":"info","protocol":1,"version":"0.1.0","engines":["sidon","mossformer2","df3"],"ready":true,"missing":[],"python":"…"}` |
-| `booth setup --events --check` | `{"event":"setup_status","ready":false,"missing":["sidon-venv",…],"bytes_total":N}` |
+| `booth setup --events --check` | `{"event":"setup_status","ready":false,"missing":["sidon-weights",…],"bytes_total":N}` |
 | `booth setup --events` | `setup` events (about 4 per second) with `phase`, `label`, `bytes_done`, `bytes_total`, `eta` and an overall `progress` (0–1, which also moves while the Sidon environment installs and no bytes are counted), then `done` or `error` |
 | `booth enhance IN --events --stems-dir DIR -o OUT --engine sidon\|mossformer2\|df3 [--no-split] [--audio-only] -s 54 -b 10 -m 10` | `hello`, `start`, `progress` (about 4 per second, never goes backwards), then `done` or `error` |
 | `booth remix DIR -s S -b B -m M --events [-o OUT]` | `hello`, `progress`, then `done` or `error`. It renders the output again from the stems at a new mix. |
@@ -375,8 +377,8 @@ Start with the log: `tail -f ~/Library/Logs/Booth/booth.log`.
   - Setup needs network access.
   - If the log says uv is missing, install uv (`brew install uv`) or rebuild with uv on your
     `PATH`, so the build bundles it.
-  - "Booth needs ffmpeg": install it (`brew install ffmpeg`), then click **Try again**. If ffmpeg
-    is installed somewhere else, Booth finds it the way a login shell does: check that
+  - "Couldn't download ffmpeg": setup downloads ffmpeg when it can't find one. If you have one
+    installed somewhere else, Booth finds it the way a login shell does: check that
     `zsh -l -c 'command -v ffmpeg'` prints its path. If it only works in Terminal, move the line
     that adds its folder to `PATH` from `~/.zshrc` to `~/.zprofile`.
 - **"Booth would like to access files in your Documents folder", or Booth shows "Waiting for the

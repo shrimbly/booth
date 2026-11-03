@@ -3,8 +3,9 @@ import CoreText
 import SwiftUI
 
 /// The "Booth" signature at the frame's bottom left (SPEC §3.4): five Geist Serif letters, each
-/// with its own colour and blur. It rests slightly out of focus and sharpens while a file is over
-/// the popover; the pointer on it brings only the letters right around it partly into focus.
+/// with its own colour and blur. It rests slightly out of focus, with soft clouds of mist drifting
+/// through it (`SignatureMist`), and sharpens while a file is over the popover; the pointer on it
+/// brings only the letters right around it partly into focus.
 ///
 /// As the popover opens, the name comes forward through fog (`SignatureReveal`), letter by
 /// letter, rising into place on screen however the panel moves as it opens.
@@ -16,6 +17,7 @@ struct SignatureView: View {
     @Environment(\.popoverChrome) private var chrome
     @Environment(\.popoverOpening) private var opening
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     /// Where the pointer is on the name, or was as it left, so the focus fades out in place.
     @State private var pointer = CGPoint.zero
     @State private var isPointing = false
@@ -34,8 +36,9 @@ struct SignatureView: View {
     /// weight; the smear fills out the upright stems and leaves the hairlines fine, the way a
     /// heavier cut of a high-contrast serif would.
     static let weight: CGFloat = 0.036
-    /// CSS `letter-spacing: -0.02em`, opened by most of the smear so the spacing holds.
-    static let tracking: CGFloat = (-0.02 + 0.7 * weight) * fontSize
+    /// CSS `letter-spacing: -0.05em` (the link-preview card's), opened by most of the smear so
+    /// the spacing holds.
+    static let tracking: CGFloat = (-0.05 + 0.7 * weight) * fontSize
 
     var body: some View {
         Group {
@@ -43,8 +46,11 @@ struct SignatureView: View {
                 letters(at: Self.snapshotMilliseconds)
             } else {
                 // Paused rather than removed when still, so the letters keep their identity and
-                // the pointer and drop easing still runs.
-                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !isWaving && !isRevealing)) { context in
+                // the pointer and drop easing still runs. The clouds alone need far fewer frames.
+                TimelineView(.animation(
+                    minimumInterval: isWaving || isRevealing ? 1.0 / 60 : SignatureMist.stepSeconds,
+                    paused: !isWaving && !isRevealing && !isDrifting)
+                ) { context in
                     letters(
                         at: context.date.timeIntervalSinceReferenceDate * 1000,
                         reveal: isRevealing ? opening.map { context.date.timeIntervalSince($0.start) } : nil)
@@ -91,6 +97,10 @@ struct SignatureView: View {
         return opening.start != settledOpening
     }
 
+    private var isDrifting: Bool {
+        SignatureMist.isDrifting(screen: screen, reduceMotion: reduceMotion)
+    }
+
     /// The letters at `milliseconds` on the wave's clock, `reveal` seconds into the popover's
     /// opening (nil: at rest).
     private func letters(at milliseconds: Double, reveal: Double? = nil) -> some View {
@@ -107,15 +117,24 @@ struct SignatureView: View {
             if !reduceMotion, let opening {
                 let offset = PanelOpening.steadying(
                     (Double(anchor.x), Double(anchor.y)), pivot: (Double(opening.pivotX), 0), at: reveal)
-                steadying = CGSize(width: offset.x, height: offset.y)
+                // In whole pixels: each letter is drawn on the pixel grid, so a fraction of one
+                // tips a letter that sits near half a pixel (the first o, at 2×) across as the
+                // panel overshoots, and back as it settles.
+                steadying = CGSize(width: pixelAligned(offset.x), height: pixelAligned(offset.y))
                 riseScale = 1 / PanelOpening.pose(at: reveal).scale
             }
         }
-        return PointerFocusView(styles: styles, reveal: parts, riseScale: riseScale, pointer: pointer, strength: isPointing ? 1 : 0)
+        return PointerFocusView(
+            styles: styles, reveal: parts, riseScale: riseScale, clouds: isDrifting ? milliseconds / 1000 : nil,
+            pointer: pointer, strength: isPointing ? 1 : 0)
             .offset(steadying)
             .overlay(alignment: .bottomLeading) {
                 if haze > 0.001 { SignatureHaze(opacity: haze) }
             }
+    }
+
+    private func pixelAligned(_ points: Double) -> CGFloat {
+        (CGFloat(points) * displayScale).rounded() / displayScale
     }
 }
 
@@ -146,13 +165,16 @@ private struct SignatureHaze: View {
 }
 
 /// The letters drawn twice, at rest and as they look under the pointer, cross-faded by a soft
-/// round patch centred on the pointer.
+/// round patch centred on the pointer. With the clouds, a third, mistier drawing shows through
+/// them away from the pointer, and the resting drawing gives way there.
 private struct PointerFocusView: View, Animatable {
     let styles: [SignatureLetterStyle]
     /// Each letter's part in the reveal; at rest once it has played.
     let reveal: [SignatureReveal.Letter]
     /// Divides the letters' rise, so it measures true on screen while the panel is still small.
     let riseScale: CGFloat
+    /// Seconds on the clouds' clock, or nil for none.
+    let clouds: Double?
     var pointer: CGPoint
     var strength: Double
 
@@ -178,10 +200,19 @@ private struct PointerFocusView: View, Animatable {
         let height = SignatureView.fontSize + 2 * bleed
         let center = UnitPoint(x: (pointer.x + bleed) / width, y: (pointer.y + bleed) / height)
         let stops = PointerFocus.stops(strength: strength)
+        let unfocused = patch(stops.map { ($0.location, 1 - $0.alpha) }, center: center)
         ZStack {
-            row(glyphs, styles)
+            row(glyphs, clouds == nil ? styles : SignatureMist.restingStyles(styles))
                 .padding(bleed)
-                .mask(patch(stops.map { ($0.location, 1 - $0.alpha) }, center: center))
+                .mask(unfocused)
+                .mask { SignatureClouds(seconds: clouds, inset: bleed, inverted: true) }
+            if clouds != nil {
+                row(glyphs, SignatureMist.styles(styles))
+                    .padding(bleed)
+                    .mask(unfocused)
+                    .mask { SignatureClouds(seconds: clouds, inset: bleed, inverted: false) }
+                    .blendMode(.plusLighter)
+            }
             row(glyphs, PointerFocus.styles(styles))
                 .padding(bleed)
                 .mask(patch(stops, center: center))
@@ -206,6 +237,70 @@ private struct PointerFocusView: View, Animatable {
         RadialGradient(
             stops: stops.map { Gradient.Stop(color: .black.opacity($0.alpha), location: $0.location) },
             center: center, startRadius: 0, endRadius: PointerFocus.reach)
+    }
+}
+
+/// The clouds as a mask: where both fields are, or with `inverted`, everywhere but there (and
+/// everywhere without clouds). The letters start `inset` in; the clouds keep their place on the
+/// letters however far the drawing's bleed reaches.
+private struct SignatureClouds: View {
+    let seconds: Double?
+    let inset: CGFloat
+    let inverted: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            if inverted { context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black)) }
+            guard let seconds else { return }
+            // Cut out of the solid layer.
+            if inverted { context.blendMode = .destinationOut }
+            context.drawLayer { clouds in
+                for (field, texture) in zip(SignatureMist.fields, CloudTexture.images) {
+                    // Without a texture (never, in practice), there are no clouds.
+                    guard let image = texture else { return }
+                    let tile = field.size
+                    let offset = field.offset(at: seconds)
+                    // A texture of 2 × 2 tiles drawn from up to a tile before the edge, so one draw
+                    // covers anything up to a tile across without a seam.
+                    let start = CGPoint(
+                        x: (inset + offset.x).truncatingRemainder(dividingBy: tile.width) - tile.width,
+                        y: (inset + offset.y).truncatingRemainder(dividingBy: tile.height) - tile.height)
+                    for x in stride(from: start.x, to: size.width, by: 2 * tile.width) {
+                        for y in stride(from: start.y, to: size.height, by: 2 * tile.height) {
+                            clouds.draw(image, in: CGRect(x: x, y: y, width: 2 * tile.width, height: 2 * tile.height))
+                        }
+                    }
+                    // The next field keeps only what lies under this one.
+                    clouds.blendMode = .destinationIn
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Each field of cloud as black with the cloud for alpha, 2 × 2 tiles at one px of the website per
+/// px. Built on first use.
+private enum CloudTexture {
+    static let images: [Image?] = SignatureMist.fields.map(image)
+
+    private static func image(of field: SignatureMist.Field) -> Image? {
+        let density = field.density()
+        let width = 2 * field.width, height = 2 * field.height
+        var pixels = [UInt8](repeating: 0, count: 4 * width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                pixels[4 * (y * width + x) + 3] = UInt8((255 * density[(y % field.height) * field.width + x % field.width]).rounded())
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let image = CGImage(
+                  width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4 * width,
+                  space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return nil }
+        return Image(decorative: image, scale: 1).interpolation(.high)
     }
 }
 

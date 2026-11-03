@@ -18,6 +18,8 @@ final class StatusItemController: NSObject {
     private var isHighlighted = false
     private var frameTimer: Timer?
     private var frameInterval: TimeInterval?
+    /// Draws the working glyph while its lamp breathes at full size, over a clear button image.
+    private var breathingGlyph: BreathingGlyphView?
     private var springLoadTimer: Timer?
     private var appearanceObservation: NSKeyValueObservation?
     private var reduceMotionObserver: NSObjectProtocol?
@@ -27,10 +29,20 @@ final class StatusItemController: NSObject {
     private var displaysAsleep = false
     private var sessionInactive = false
 
+    /// The name macOS gives an app's first status item, and a second one the icon takes turns
+    /// with while it settles: changing names makes macOS place it by the new name's position.
+    private static let itemName = "Item-0"
+    private static let settlingName = "Booth settling"
+    /// The first launch's search for the icon's place; nil once it has settled.
+    private var settling: MenuBarPlacement.Search?
+    private var settlingCheck: DispatchWorkItem?
+
     init(model: AppModel) {
         self.model = model
+        let firstPosition = Self.placeOnFirstLaunch()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+        settling = firstPosition.map { MenuBarPlacement.Search(position: $0) }
         configureButton()
         configureDropTarget()
         observeEnvironment()
@@ -54,6 +66,49 @@ final class StatusItemController: NSObject {
     var onFilesDropped: (() -> Void)?
 
     // MARK: Setup
+
+    /// Where macOS keeps an icon's place, by the icon's name (`MenuBarPlacement`).
+    private static func positionKey(_ name: String) -> String {
+        "NSStatusItem Preferred Position \(name)"
+    }
+
+    /// macOS adds a new icon at the left end of the others, which on a full menu bar is behind
+    /// the camera housing or off the screen, so a first launch shows no icon at all. Until it is
+    /// moved, Booth's goes fourth from the right instead (`MenuBarPlacement`): this is the first
+    /// guess, which `settle()` corrects once the icon is drawn. Nil after the first launch.
+    private static func placeOnFirstLaunch() -> Double? {
+        let key = positionKey(itemName)
+        guard UserDefaults.standard.object(forKey: key) == nil else { return nil }
+        let menuBar = menuBarIcons()
+        let guess = menuBar.flatMap { menuBar in
+            MenuBarPlacement.preferredPosition(icons: menuBar.icons.map { ($0.minX, $0.maxX) }, screenMaxX: menuBar.screenMaxX)
+        }
+        UserDefaults.standard.set(guess ?? 0, forKey: key)
+        Log.info("status item: first placement, preferred position \(Int(guess ?? 0)) among \(menuBar?.icons.count ?? 0) icons")
+        return guess ?? 0
+    }
+
+    /// The icons in the main display's menu bar, from the window list: their frames need no
+    /// permission (their names would).
+    private static func menuBarIcons() -> (icons: [(number: Int, minX: Double, maxX: Double)], screenMaxX: Double)? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let level = Int(CGWindowLevelForKey(.statusWindow))
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let icons = windows.compactMap { window -> (number: Int, minX: Double, maxX: Double)? in
+            guard window[kCGWindowLayer as String] as? Int == level,
+                  let number = window[kCGWindowNumber as String] as? Int,
+                  // Stand-ins the window server draws while an icon is dragged.
+                  window[kCGWindowOwnerName as String] as? String != "Window Server",
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  // In the main display's menu bar (window-list coordinates start at its top left).
+                  frame.minY < 2, frame.height < 60, frame.width >= 12,
+                  frame.minX >= screen.frame.minX, frame.maxX <= screen.frame.maxX + 4
+            else { return nil }
+            return (number, Double(frame.minX), Double(frame.maxX))
+        }
+        return (icons, Double(screen.frame.maxX))
+    }
 
     private func configureButton() {
         guard let button = statusItem.button else {
@@ -120,8 +175,71 @@ final class StatusItemController: NSObject {
 
     private func windowDidMove(_ window: NSWindow?) {
         guard let window, window === statusItem.button?.window else { return }
-        Log.info("status item at \(NSStringFromRect(window.frame))")
+        Log.info("status item at \(NSStringFromRect(window.frame))\(Self.isHidden(window.frame) ? " (hidden: off the screen or behind the camera housing)" : "")")
         onAnchorChange?()
+        if settling != nil { checkSettling(after: 0.25) }
+    }
+
+    /// Off every screen, or partly under a camera housing (between the menu bar's two halves).
+    private static func isHidden(_ frame: NSRect) -> Bool {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: frame.midX, y: frame.midY)) }) else {
+            return true
+        }
+        guard let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea else { return false }
+        return frame.maxX > left.maxX && frame.minX < right.minX
+    }
+
+    // MARK: Settling the first placement
+
+    private func checkSettling(after delay: TimeInterval) {
+        settlingCheck?.cancel()
+        let check = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.settle() }
+        }
+        settlingCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: check)
+    }
+
+    /// Counts the movable icons between Booth's and Control Centre, and moves it until there
+    /// are three (`MenuBarPlacement.Search`).
+    private func settle() {
+        guard var search = settling, let window = statusItem.button?.window,
+              // Placed in a menu bar at all, hidden or not.
+              window.frame.minY >= 0,
+              let menuBar = Self.menuBarIcons()
+        else { return }
+        let others = menuBar.icons.filter { $0.number != window.windowNumber }
+        let available = max(0, others.count - MenuBarPlacement.fixedIcons)
+        let toTheRight = max(0, others.filter { $0.minX >= window.frame.maxX - 1 }.count - MenuBarPlacement.fixedIcons)
+        if let next = search.next(iconsToTheRight: toTheRight, available: available) {
+            settling = search
+            move(to: next)
+        } else {
+            settling = nil
+            keep(search.position)
+            Log.info("status item: settled with \(toTheRight) of \(available) icons between it and Control Centre (preferred position \(Int(search.position)))")
+        }
+    }
+
+    /// Places the icon by `position`. macOS rereads a position when the icon's name changes, so
+    /// the icon takes turns between its two.
+    private func move(to position: Double) {
+        let name = statusItem.autosaveName == Self.settlingName ? Self.itemName : Self.settlingName
+        UserDefaults.standard.set(position, forKey: Self.positionKey(name))
+        statusItem.autosaveName = name
+        Log.info("status item: trying preferred position \(Int(position))")
+        checkSettling(after: 0.4)
+    }
+
+    /// Ends under its usual name at `position`, and leaves nothing of the other behind.
+    private func keep(_ position: Double) {
+        let defaults = UserDefaults.standard
+        if statusItem.autosaveName != Self.itemName {
+            defaults.set(position, forKey: Self.positionKey(Self.itemName))
+            statusItem.autosaveName = Self.itemName
+        }
+        defaults.removeObject(forKey: Self.positionKey(Self.settlingName))
+        defaults.removeObject(forKey: "NSStatusItem Visible \(Self.settlingName)")
     }
 
     private func visibilityDidChange(_ name: Notification.Name) {
@@ -132,8 +250,8 @@ final class StatusItemController: NSObject {
         case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false
         default: return
         }
+        updateMotion()
         redraw()
-        updateFrameTimer()
     }
 
     @objc private func buttonClicked() {
@@ -183,8 +301,8 @@ final class StatusItemController: NSObject {
             isHighlighted = highlighted
             applyHighlight()
         }
+        updateMotion()
         redraw()
-        updateFrameTimer()
     }
 
     /// A click clears the button's highlight when its tracking ends, after the action has run,
@@ -198,6 +316,11 @@ final class StatusItemController: NSObject {
 
     private func redraw() {
         guard let button = statusItem.button else { return }
+        if let breathingGlyph {
+            breathingGlyph.update(ink: menuBarInk, in: button)
+            if button.image !== BreathingGlyphView.placeholder { button.image = BreathingGlyphView.placeholder }
+            return
+        }
         let now = CACurrentMediaTime()
         let breathe = Motion.prefersReducedMotion || !isVisible
             ? 1 // Reduce Motion, or nobody to see it: the lamp stays lit and does not breathe.
@@ -208,16 +331,13 @@ final class StatusItemController: NSObject {
     /// Someone could be looking at the menu bar.
     private var isVisible: Bool { !displaysAsleep && !sessionInactive }
 
-    /// 60 fps while the icon grows or shrinks, 24 fps while the lamp breathes, otherwise idle.
-    private func updateFrameTimer() {
-        let interval: TimeInterval?
-        if !scale.isSettled(at: CACurrentMediaTime()) {
-            interval = 1.0 / 60
-        } else if mode == .working && !Motion.prefersReducedMotion && isVisible {
-            interval = 1.0 / 24
-        } else {
-            interval = nil
-        }
+    /// A 60 fps timer while the icon grows or shrinks. At full size the working lamp breathes on
+    /// Core Animation's clock (`BreathingGlyphView`); otherwise the icon holds still.
+    private func updateMotion() {
+        let isSettled = scale.isSettled(at: CACurrentMediaTime())
+        // The breathing view draws the glyph at full size only.
+        showBreathingGlyph(isSettled && scale.target == 1 && mode == .working && !Motion.prefersReducedMotion && isVisible)
+        let interval: TimeInterval? = isSettled ? nil : 1.0 / 60
         guard interval != frameInterval else { return }
         frameTimer?.invalidate()
         frameTimer = nil
@@ -230,8 +350,21 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func frameTick() {
+        updateMotion()
         redraw()
-        updateFrameTimer()
+    }
+
+    private func showBreathingGlyph(_ shows: Bool) {
+        guard shows != (breathingGlyph != nil), let button = statusItem.button else { return }
+        if shows {
+            let glyph = BreathingGlyphView()
+            // Under the drop view; it takes no clicks itself.
+            button.addSubview(glyph, positioned: .below, relativeTo: nil)
+            breathingGlyph = glyph
+        } else {
+            breathingGlyph?.removeFromSuperview()
+            breathingGlyph = nil
+        }
     }
 
     /// The menu bar's own text colour, for the one non-template image.
@@ -249,6 +382,98 @@ final class StatusItemController: NSObject {
         case .idle, .target: value = nil
         }
         statusItem.button?.setAccessibilityValue(value)
+    }
+}
+
+/// The working glyph with its lamp breathing: `GlyphRenderer`'s drawings at `frameCount` phases
+/// of the breath, cycled by a repeating Core Animation animation. Redrawing the button's image
+/// 24 times a second kept the app at about 5% CPU for the whole of a job; this way it does no
+/// work per frame.
+private final class BreathingGlyphView: NSView {
+    /// 34 frames over the 1.4 s breath: 24 fps, the rate the image was redrawn at.
+    static let frameCount = 34
+    /// The button's image meanwhile: clear, the glyph's size, so the button keeps its own.
+    static let placeholder: NSImage = {
+        let image = NSImage(size: GlyphRenderer.size)
+        image.accessibilityDescription = "Booth"
+        return image
+    }()
+
+    private let frameLayer = CALayer()
+    private var ink: NSColor?
+    private var backingScale: CGFloat = 0
+
+    init() {
+        super.init(frame: NSRect(origin: .zero, size: GlyphRenderer.size))
+        // Layer-hosting: the view owns this layer and animates it as it likes.
+        layer = frameLayer
+        wantsLayer = true
+        frameLayer.contentsGravity = .resize
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    /// Carried to a display of another scale, it redraws its frames there at once rather than
+    /// at the next redraw.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let ink, let button = superview as? NSStatusBarButton { update(ink: ink, in: button) }
+    }
+
+    /// Sits where the button draws its image, and redraws the frames when the menu bar's ink or
+    /// the display's scale has changed.
+    func update(ink: NSColor, in button: NSStatusBarButton) {
+        let place = button.cell?.imageRect(forBounds: button.bounds)
+            ?? NSRect(origin: NSPoint(x: (button.bounds.width - GlyphRenderer.size.width) / 2,
+                                      y: (button.bounds.height - GlyphRenderer.size.height) / 2),
+                      size: GlyphRenderer.size)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if frame != place { frame = place }
+        let scale = button.window?.backingScaleFactor ?? 2
+        guard ink != self.ink || scale != backingScale else { return }
+        self.ink = ink
+        backingScale = scale
+        let frames = Self.frames(ink: ink.cgColor, scale: scale)
+        frameLayer.contentsScale = scale
+        frameLayer.contents = frames.first
+        let breath = CAKeyframeAnimation(keyPath: "contents")
+        breath.values = frames
+        breath.calculationMode = .discrete
+        breath.duration = GlyphRenderer.breathPeriod
+        breath.repeatCount = .infinity
+        // At the phase the image would be drawn at now, so the breath carries on unbroken when
+        // the icon comes back to full size or the frames are redrawn.
+        breath.timeOffset = CACurrentMediaTime().truncatingRemainder(dividingBy: GlyphRenderer.breathPeriod)
+        breath.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 24, preferred: 24)
+        breath.isRemovedOnCompletion = false
+        frameLayer.add(breath, forKey: "breath")
+    }
+
+    /// The working glyph at each phase, `scale` pixels to the point.
+    private static func frames(ink: CGColor, scale: CGFloat) -> [CGImage] {
+        let pixels = Int((GlyphRenderer.size.width * scale).rounded())
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return [] }
+        return (0..<frameCount).compactMap { index in
+            guard let context = CGContext(
+                data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            // The glyph's 18-unit box with y down, as the image's drawing handler has it.
+            context.scaleBy(x: scale, y: -scale)
+            context.translateBy(x: 0, y: -GlyphRenderer.size.height)
+            let breathe = GlyphRenderer.breathe(atPhase: Double(index) / Double(frameCount))
+            GlyphRenderer.draw(.working, breathe: breathe, scale: 1, ink: ink, in: context)
+            return context.makeImage()
+        }
     }
 }
 

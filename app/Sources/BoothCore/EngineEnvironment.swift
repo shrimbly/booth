@@ -7,11 +7,11 @@ import Foundation
 public enum EngineEnvironment {
     public static let fallbackPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 
-    /// The engine's own override for the uv it uses to bootstrap the Sidon venv.
+    /// The engine's own override for the uv it runs the MossFormer2 engine with.
     public static let uvKey = "BOOTH_ENGINE_UV"
 
     /// Tells the `booth` command in Booth.app not to install or update the engine. Booth
-    /// does that itself, with progress; a probe must never start a 540 MB install.
+    /// does that itself, with progress; a probe must never start a 950 MB install.
     public static let noInstallKey = "BOOTH_NO_INSTALL"
 
     /// The engine reads and writes every file, audio or video, with these.
@@ -25,9 +25,16 @@ public enum EngineEnvironment {
         ["/opt/homebrew/bin", "/usr/local/bin", home + "/.local/bin", home + "/.cargo/bin"]
     }
 
+    /// Where the engine's setup puts the ffmpeg and ffprobe it downloads when neither is installed
+    /// (the engine's `tools.BIN_DIR`).
+    public static func downloadedToolsDirectory(home: String) -> String {
+        home + "/.cache/booth/bin"
+    }
+
     /// `base` with `PATH` extended, unbuffered Python output, and `BOOTH_ENGINE_UV` set when Booth
     /// found a uv (whose directory also joins `PATH`). `toolDirectories` replaces the usual ones
     /// (nil keeps them); `extraDirectories` follow them, such as where the login shell found ffmpeg.
+    /// The ffmpeg Booth downloaded comes last of all, so one of the user's own always wins.
     public static func make(
         base: [String: String],
         home: String,
@@ -43,6 +50,7 @@ public enum EngineEnvironment {
         var path = basePath.split(separator: ":").map(String.init).filter { !$0.isEmpty }
         var extras = (toolDirectories ?? Self.toolDirectories(home: home)) + extraDirectories
         if let uv { extras.append((uv as NSString).deletingLastPathComponent) }
+        extras.append(downloadedToolsDirectory(home: home))
         for directory in extras where !path.contains(directory) && directoryExists(directory) {
             path.append(directory)
         }

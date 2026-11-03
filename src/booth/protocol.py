@@ -217,9 +217,8 @@ def _enhance(stream: EventStream, args, make_settings: Callable, started: float)
         raise JobError("decode_failed", _not_allowed(name), str(e)) from None
     except OSError as e:                    # a folder, an unreadable device, …
         raise JobError("decode_failed", _unreadable(name), str(e)) from None
-    if tools.missing_ffmpeg_tools():
-        raise JobError("setup_required", "Booth needs ffmpeg to read audio. "
-                                         "Install it with Homebrew (brew install ffmpeg).")
+    if tools.missing_ffmpeg_tools():     # setup downloads it
+        raise JobError("setup_required", "Booth needs ffmpeg to read audio.")
     no_sound = f"{name} has a video track but no sound. Nothing was changed."
     try:
         info = A.probe(inp)

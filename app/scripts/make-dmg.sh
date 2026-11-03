@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Packages a built Booth.app as a drag-to-install disk image: Booth.app beside a link to
-# /Applications. With --sign it signs the image; with --notarize it also sends the image to Apple's
+# /Applications, in the window packaging/dmg lays out. With --sign it signs the image; with --notarize it also sends the image to Apple's
 # notary service and staples the ticket, which needs a Developer ID build (build-app.sh --dist
 # --sign "Developer ID Application: …") and a notarytool keychain profile.
 #
@@ -32,6 +32,8 @@ die() {
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+layout=$script_dir/../../packaging/dmg
+dmgbuild_version=1.6.7
 app=$script_dir/../build/Booth.app
 out_dir=$script_dir/../build
 sign_identity=
@@ -79,14 +81,13 @@ dmg=$out_dir/Booth-$version.dmg
 
 staging=$(mktemp -d "${TMPDIR:-/tmp}/booth-dmg.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
-log "Staging Booth $version"
-ditto "$app" "$staging/Booth.app"
-ln -s /Applications "$staging/Applications"
 
 log "Creating $(basename "$dmg")"
 rm -f "$dmg"
-# ULFO (lzfse) is smaller and faster to open than zlib, and every macOS Booth runs on reads it.
-hdiutil create -volname Booth -srcfolder "$staging" -fs HFS+ -format ULFO -ov "$dmg" >&2
+# dmgbuild writes the window's layout itself rather than driving the Finder, so CI can make it too.
+command -v uv >/dev/null || die "needs uv to run dmgbuild: https://docs.astral.sh/uv/"
+uv tool run --quiet --from "dmgbuild==$dmgbuild_version" dmgbuild -s "$layout/settings.py" \
+	-D app="$app" -D background="$layout/background.tiff" Booth "$dmg" >&2
 
 if [[ -n $sign_identity ]]; then
 	log "Signing the image as $sign_identity"

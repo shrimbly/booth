@@ -108,7 +108,7 @@ private struct DemoScene: View {
         ZStack(alignment: .topLeading) {
             desktop
             restingFile
-            MenuBar(glyph: glyph, pressed: popoverOpacity > 0, width: Self.screen.width)
+            MenuBar(glyph: glyph, pressed: popoverOpacity > 0, width: Self.screen.width, zoom: scale)
             popover
             dragging
         }
@@ -367,6 +367,10 @@ private struct MenuBar: View {
     let glyph: (mode: GlyphMode, breathe: Double, scale: CGFloat)
     let pressed: Bool
     let width: CGFloat
+    /// The camera's zoom, so the icon is drawn at the frame's own pixels.
+    let zoom: CGFloat
+
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         HStack(spacing: 0) {
@@ -383,8 +387,10 @@ private struct MenuBar: View {
                             .fill(.white.opacity(0.24))
                             .frame(width: 30, height: 20)
                     }
-                    Image(nsImage: GlyphRenderer.image(glyph.mode, breathe: glyph.breathe, scale: glyph.scale, ink: .white))
-                        .renderingMode(glyph.mode.isTemplate ? .template : .original)
+                    if let icon = glyphImage {
+                        Image(decorative: icon.image, scale: icon.scale)
+                            .renderingMode(glyph.mode.isTemplate ? .template : .original)
+                    }
                 }
                 .frame(width: 30, height: 24)
                 Image(systemName: "battery.75percent")
@@ -402,5 +408,25 @@ private struct MenuBar: View {
         .frame(width: width, height: 24)
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.2), radius: 1)
+    }
+
+    /// Booth's icon, drawn into a bitmap at the frame's pixels beforehand: an `NSImage` that
+    /// AppKit draws partway through the frame upsets how the rest of it composites, and the
+    /// signature's cross-fades come out uneven.
+    private var glyphImage: (image: CGImage, scale: CGFloat)? {
+        let size = GlyphRenderer.size
+        let pixels = Int((size.width * displayScale * zoom).rounded(.up))
+        let scale = CGFloat(pixels) / size.width
+        guard let context = CGContext(
+            data: nil, width: pixels, height: pixels, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        // The glyph's user space is y down.
+        context.scaleBy(x: scale, y: -scale)
+        context.translateBy(x: 0, y: -size.height)
+        let ink = glyph.mode.isTemplate ? NSColor.black : .white
+        GlyphRenderer.draw(glyph.mode, breathe: glyph.breathe, scale: glyph.scale, ink: ink.cgColor, in: context)
+        return context.makeImage().map { ($0, scale) }
     }
 }

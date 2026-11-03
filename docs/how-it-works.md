@@ -18,16 +18,18 @@ from them. It rebuilds harmonics and bandwidth instead of masking noise, which
 is where the clarity comes from. Discriminative denoisers (MossFormer2,
 DeepFilterNet) can only subtract noise, so they sound muffled.
 
-Sidon runs in its own Python environment, `~/.cache/booth/sidon-venv`,
-because it needs a newer torch and transformers than the rest of the engine.
-Every package in it is pinned to an exact version, and the Sidon and w2v-BERT
-files are pinned to exact Hugging Face commits, so an upstream release can't
-change the results below. Setup also checks the downloaded DeepFilterNet3
-files against the SHA-256 hashes of the tested copy. The environment counts as
-installed only once its install has finished and its packages import. Setup
-rebuilds it from scratch if an install was interrupted or failed, or if the
-pins changed. An environment set up before this check is kept as long as every
-pinned package is fully installed.
+Sidon, Demucs and the rest of the engine share one Python environment. torch,
+transformers and huggingface_hub are pinned to the versions Sidon was tested
+with, `uv.lock` pins every other package, and the Sidon and w2v-BERT files are
+pinned to exact Hugging Face commits, so an upstream release can't change the
+results below. Sidon runs in a child process, so the memory it holds while it
+works (about 4 GB) goes back to the system when it finishes. The child starts
+as soon as the audio is read and loads its models while demucs separates the
+music, then restores once demucs is done, so the two don't compete for cores.
+DeepFilterNet3 ships with the engine as `data/deepfilternet3.onnx`, exported
+from its checkpoint by `scripts/export-deepfilternet3.py`, and runs on
+onnxruntime with numpy doing the signal processing around the network; its
+output matches the PyTorch model to float rounding (−106 dB or less).
 
 Measured against Adobe Podcast Enhance v2 on four real recordings (30 s clips,
 three held out from all earlier calibration; `scripts/bench.py`):
@@ -52,7 +54,12 @@ Sidon-specific post-processing, each step measured on the benchmark:
   context degrades the model (96 s chunks: UTMOS 3.77 vs 3.89 on a 112 s file).
 - **Tone correction.** Sidon runs 6–8 dB hotter than Adobe above 12 kHz on every
   lossless pair (audible as fizz), so the chain applies a −6 dB shelf from
-  12 kHz, a 20 kHz rolloff, and a 40 Hz high-pass for regenerated rumble.
+  12 kHz, a 20 kHz rolloff, and a 40 Hz high-pass for regenerated rumble. Its
+  low end also comes out 4–7 dB fuller than the input below 500 Hz (most at
+  80–125 Hz), which sounds boomy, as Adobe's does: a −3 dB shelf below 150 Hz,
+  easing to flat an octave up, and a 12 dB/octave roll-off below 60 Hz take
+  the edge off. That was picked by ear over stronger cuts and over matching
+  the input's own balance.
 - **Speech gate keyed by DeepFilterNet3.** The generative model reproduces
   mouse clicks and low-level noise in pauses. DF3's output marks where speech
   actually is, and a lookahead gate with a 12 dB range drops pauses to around
@@ -62,6 +69,24 @@ Sidon-specific post-processing, each step measured on the benchmark:
   pulls down short bursts that stand far above the audio on *both* sides, so
   p/t/k bursts are kept because their vowel follows immediately. Off with
   `--no-declick`.
+- **Breath removal.** Sidon rebuilds the breaths between phrases, which
+  Adobe leaves out, and in a clean voice they sound like noise. `dsp.breath_frames`
+  marks a 10 ms frame as breath when it is clear of sustained pitch, 12 dB or
+  more below the speech, centred 0.7–3.5 kHz like an inhale, and not speech to
+  [Silero VAD](https://github.com/snakers4/silero-vad) (`booth/vad.py`), which
+  tells a breath from quiet speech by context. Pitch counts only when it is
+  loud or low, because the tracker finds stray pitch in breath noise. Runs with
+  120 ms or more you can hear are breaths, widened up to 60 ms into the quiet
+  beside them. A lip smack or tongue click beside a breath, too loud to count
+  as breath itself, goes with it unless a word starts within 150 ms. Each
+  breath comes down to the level of the pauses within 2 s of it as you hear
+  them (A-weighted): a breath's hiss sits where hearing is keenest and room tone
+  mostly below it, so matched by plain level, removed breaths still sounded
+  about 8 dB over the pauses at their loudest. Now their loud parts sit about
+  1 dB over, and their quiet parts a few dB under. The gain ramps in and out
+  over 10 ms inside the breath, so the speech either side keeps its level. On a
+  200 s voice-over this removed 90% of the breath time Adobe silenced (52 of 57
+  breaths), plus under a second of what Adobe kept. Off with `--no-breaths`.
 - **Harmonic smoothing.** Sidon's harmonics are fuzzier than Adobe's, which
   is heard as a slightly rough, "wobbly" voice. A pitch-following filter turns
   down the energy between harmonics by up to 6 dB below 3.5 kHz. Voiced
@@ -111,7 +136,11 @@ least-squares fitting Adobe's output onto this pipeline's stem basis:
 
 ## Video and multitrack files
 
-ffmpeg reads the input and writes the enhanced copy (`audio.py`).
+ffmpeg reads the input and writes the enhanced copy (`audio.py`). Booth uses
+the ffmpeg on your `PATH`. On a Mac without one, setup downloads Martin Riedl's
+static build of FFmpeg 9.0.2 for Apple silicon into `~/.cache/booth/bin`,
+checked against pinned SHA-256 hashes, and puts that folder last on the
+engine's `PATH`, so an ffmpeg you install later takes over.
 
 - **The track that's enhanced** is the one ffmpeg would pick itself: a
   default track first, then the one with the most channels. It's mixed down to

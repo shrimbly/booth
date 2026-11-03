@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  The disk image's window background, packaging/dmg/background.tiff. Finder draws the icons over
+  it at settings.py's icon_locations (their centres), so the drop zone here sits around the
+  Applications link. Render it at 1× and 2× and pack both into one TIFF:
+
+    chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    for s in 1 2; do "$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=$s \
+      --window-size=600,340 --screenshot=/tmp/background@${s}x.png packaging/dmg/background.html; done
+    tiffutil -cathidpicheck /tmp/background@1x.png /tmp/background@2x.png -out packaging/dmg/background.tiff
+
+  Everything sits in the top 300 points: below the title bar, macOS 26's Finder also shows a tab
+  bar on every disk image, and settings.py's window leaves that much room under both. Earlier
+  macOS shows a little more, so the paper runs on 40 points past it.
+
+  Finder always draws a window with a background picture in Light Mode, so this is drawn light
+  only, and the icon labels stay dark on it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Booth disk image</title>
+<style>
+:root {
+  --paper: #f6f6f4;
+  --muted: #6e6e73;
+  /* Booth's drop zone: round dots, 1.5 pt, a 3 pt pitch, in the theme's dash colour. */
+  --dash: rgb(60 60 67 / 0.38);
+}
+html, body { margin: 0; width: 600px; height: 340px; overflow: hidden; }
+body {
+  position: relative;
+  background: var(--paper);
+  font: 500 13px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+svg { position: absolute; inset: 0; }
+.caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 252px;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  letter-spacing: -0.003em;
+}
+</style>
+</head>
+<body>
+  <svg width="600" height="340" viewBox="0 0 600 340" aria-hidden="true">
+    <!-- Around the Applications link at (440, 124), its label included: the drop zone, as in the popover. -->
+    <rect x="368.75" y="48.75" width="142.5" height="166.5" rx="22" fill="none"
+      stroke="var(--dash)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="0 3"/>
+    <!-- From Booth to Applications, at the icons' height. -->
+    <g fill="none" stroke="var(--muted)" stroke-opacity="0.6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M240 124 C 272 109, 312 109, 344 124"/>
+      <path d="M334.5 116.5 L 344 124 L 332 126.5"/>
+    </g>
+  </svg>
+  <p class="caption">Drag Booth into Applications</p>
+</body>
+</html>

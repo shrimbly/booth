@@ -6,17 +6,58 @@ memory stays flat however long the input is. Block results match a whole-file
 pass to float rounding: margins outlast every filter's reach, STFT blocks are
 frame-aligned, and statistics that span the whole file (quantiles, means) are
 gathered first and applied afterwards.
+
+Blocks that don't depend on each other run on a few threads (_map), and their
+results are put together in block order, so every result is the same as one
+thread's, bit for bit.
+
+scipy.signal is imported where it is used: `booth remix` needs none of it,
+and importing it takes a third of a second.
 """
 
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from scipy import fft as sp_fft
-from scipy import signal
 
 BLOCK = 30 * 48000          # samples per block for long signals
+# Frames the per-frame analyses take at once; a whole block's 3000 at once took
+# 120 MB a thread.
+FRAME_ROWS = 500
+# Threads for independent blocks (scipy's filters and FFTs and numpy's array
+# maths run without the GIL). Four take most of the gain; each holds the
+# working memory of one block.
+WORKERS = max(1, min(4, os.cpu_count() or 1))
+_THREAD_NAME = "booth-dsp"
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
+
+
+def _map(fn: Callable, items, workers: int = WORKERS) -> list:
+    """[fn(item) for item in items], at most `workers` (and WORKERS) at a time;
+    results in order."""
+    global _pool
+    items = list(items)
+    # Inside a worker the blocks run in place: waiting on a full pool would deadlock.
+    if (min(workers, WORKERS) == 1 or len(items) < 2
+            or threading.current_thread().name.startswith(_THREAD_NAME)):
+        return [fn(item) for item in items]
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(WORKERS, thread_name_prefix=_THREAD_NAME)
+    if workers >= WORKERS:
+        return list(_pool.map(fn, items))
+    slots = threading.BoundedSemaphore(workers)
+
+    def limited(item):
+        with slots:
+            return fn(item)
+
+    return list(_pool.map(limited, items))
 
 
 def _spans(n: int, block: int = BLOCK, align: int = 1) -> list[tuple[int, int]]:
@@ -42,8 +83,12 @@ def _mean_square(x: np.ndarray, frame: int, k: int, scale: float = 1.0) -> np.nd
 def _apply_gain(x: np.ndarray, gain_at: Callable[[int, int], np.ndarray]) -> np.ndarray:
     """(x * gain).astype(float32), where gain_at(a, b) is the gain of samples [a, b)."""
     out = np.empty(len(x), np.float32)
-    for a, b in _spans(len(x)):
+
+    def block(span):
+        a, b = span
         out[a:b] = x[a:b] * gain_at(a, b)
+
+    _map(block, _spans(len(x)))
     return out
 
 
@@ -51,6 +96,9 @@ def _stft_frames(x: np.ndarray, sr: int, nperseg: int,
                  hop: int) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
     """Yield (k0, f, Z): Z[:, j] is frame k0 + j of
     signal.stft(x, sr, nperseg=nperseg, noverlap=nperseg - hop), block by block."""
+    from scipy import fft as sp_fft
+    from scipy import signal
+
     n = len(x)
     total = -(-n // hop) + 1                     # frames of the whole-file transform
     reach = -(-(nperseg // 2) // hop) * hop      # half a window, rounded up to whole hops
@@ -60,7 +108,8 @@ def _stft_frames(x: np.ndarray, sr: int, nperseg: int,
         s1 = min(n, (k1 - 1) * hop + reach)
         # At least one whole window, or stft would shrink it (the last frames are padding).
         s0 = max(0, min(k0 * hop - reach, (s1 - nperseg) // hop * hop))
-        f, _, Z = signal.stft(x[s0:s1], sr, nperseg=nperseg, noverlap=nperseg - hop)
+        with sp_fft.set_workers(WORKERS):       # frames split between threads, each whole
+            f, _, Z = signal.stft(x[s0:s1], sr, nperseg=nperseg, noverlap=nperseg - hop)
         j0 = k0 - s0 // hop
         yield k0, f, Z[:, j0:j0 + k1 - k0]
 
@@ -75,22 +124,30 @@ def _stft_filter(x: np.ndarray, sr: int, nperseg: int, hop: int,
     block recomputes — so if modify depends only on the frame index (and on
     its next neighbours), the result matches the whole-file transform.
     """
+    from scipy import fft as sp_fft
+    from scipy import signal
+
     n = len(x)
     margin = -(-2 * nperseg // hop) * hop        # a window plus room for neighbour smoothing
     out = np.zeros(n, np.float32)
-    for a, b in _spans(n, align=hop):
-        s0, s1 = max(0, a - margin), min(n, b + margin)
-        _, _, Z = signal.stft(x[s0:s1], sr, nperseg=nperseg, noverlap=nperseg - hop)
-        modify(Z, s0 // hop)
-        _, y = signal.istft(Z, sr, nperseg=nperseg, noverlap=nperseg - hop)
-        seg = y[a - s0:b - s0]
-        out[a:a + len(seg)] = seg
+    # One block at a time (a block's spectrum is ~100 MB), its frames' FFTs split
+    # between threads.
+    with sp_fft.set_workers(WORKERS):
+        for a, b in _spans(n, align=hop):
+            s0, s1 = max(0, a - margin), min(n, b + margin)
+            _, _, Z = signal.stft(x[s0:s1], sr, nperseg=nperseg, noverlap=nperseg - hop)
+            modify(Z, s0 // hop)
+            _, y = signal.istft(Z, sr, nperseg=nperseg, noverlap=nperseg - hop)
+            seg = y[a - s0:b - s0]
+            out[a:a + len(seg)] = seg
     return out
 
 
 def _fir_span(src: np.ndarray, src_start: int, taps: np.ndarray, a: int, b: int) -> np.ndarray:
     """Samples [a, b) of apply_fir's output. `src` holds the input from sample
     `src_start` on; the input counts as zero wherever `src` has no samples."""
+    from scipy import signal
+
     k = len(taps)
     delay = k // 2
     lo, hi = a + delay - k + 1, b + delay                 # input samples the span needs
@@ -124,6 +181,8 @@ def align(ref: np.ndarray, x: np.ndarray, sr: int = 48000,
     Uses FFT cross-correlation on a window from the middle of the signals.
     Returns (lag, aligned_x): lag > 0 means x was late relative to ref.
     """
+    from scipy import signal
+
     n = min(len(ref), len(x))
     w = int(min(window_s * sr, n))
     start = (n - w) // 2
@@ -147,6 +206,8 @@ def envelope_lag(ref: np.ndarray, x: np.ndarray, sr: int = 48000,
     aligns x to ref (k > 0: x was late). The envelopes are built, and the ±max_lag
     correlation summed, a block at a time.
     """
+    from scipy import signal
+
     sos_b = signal.butter(4, [300, 4000], btype="band", fs=sr, output="sos")
     sos_l = signal.butter(2, 200, fs=sr, output="sos")
     n = min(len(ref), len(x))
@@ -159,15 +220,23 @@ def envelope_lag(ref: np.ndarray, x: np.ndarray, sr: int = 48000,
         return signal.sosfiltfilt(sos_l, u)[r0 - s0:r1 - s0]
 
     spans = _spans(n)
-    mean_a = sum(float(env(ref, a, b).sum()) for a, b in spans) / n
-    mean_b = sum(float(env(x, a, b).sum()) for a, b in spans) / n
+    sums = _map(lambda job: float(env(job[0], *job[1]).sum()),
+                [(y, span) for y in (ref, x) for span in spans])
+    mean_a = sum(sums[:len(spans)]) / n     # summed in block order, as one thread would
+    mean_b = sum(sums[len(spans):]) / n
     lag = min(max_lag, n - 1)
-    corr = np.zeros(2 * lag + 1)            # corr[k + lag] = sum_t b[t + k] * a[t]
-    for t0, t1 in spans:
+
+    def block_corr(span):
+        t0, t1 = span
         seg = np.zeros(t1 - t0 + 2 * lag)
         s0, s1 = max(0, t0 - lag), min(n, t1 + lag)
         seg[s0 - (t0 - lag):s1 - (t0 - lag)] = env(x, s0, s1) - mean_b
-        corr += signal.correlate(seg, env(ref, t0, t1) - mean_a, mode="valid", method="fft")
+        return signal.correlate(seg, env(ref, t0, t1) - mean_a, mode="valid", method="fft")
+
+    corr = np.zeros(2 * lag + 1)            # corr[k + lag] = sum_t b[t + k] * a[t]
+    # Two at a time: each block's correlation is a 3M-point FFT, ~200 MB resident.
+    for c in _map(block_corr, spans, workers=2):
+        corr += c
     return int(np.argmax(corr)) - lag
 
 
@@ -193,6 +262,8 @@ def si_sdr(est: np.ndarray, ref: np.ndarray, eps: float = 1e-9) -> float:
 def active_spectrum(x: np.ndarray, sr: int, nfft: int = 4096,
                     keep: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     """Average power spectrum over the loudest `keep` fraction of frames (speech-active)."""
+    from scipy import signal
+
     hop = nfft // 2
     f, _, Z = signal.stft(x, fs=sr, nperseg=nfft, noverlap=nfft - hop, padded=False)
     power = (np.abs(Z) ** 2)
@@ -219,6 +290,8 @@ def octave_smooth(freqs: np.ndarray, mag_db: np.ndarray, frac: float = 6.0) -> n
 def design_match_fir(freqs: np.ndarray, gain_db: np.ndarray, sr: int,
                      ntaps: int = 2047) -> np.ndarray:
     """Linear-phase FIR whose magnitude follows gain_db over freqs."""
+    from scipy import signal
+
     grid = np.concatenate([[0.0], freqs, [sr / 2]])
     gains = np.concatenate([[gain_db[0]], gain_db, [gain_db[-1]]])
     # firwin2 needs strictly increasing normalized freqs in [0, 1]
@@ -231,8 +304,12 @@ def design_match_fir(freqs: np.ndarray, gain_db: np.ndarray, sr: int,
 def apply_fir(x: np.ndarray, taps: np.ndarray) -> np.ndarray:
     """Zero-latency application of a linear-phase FIR (compensates group delay)."""
     out = np.empty(len(x), np.float32)
-    for a, b in _spans(len(x)):
+
+    def block(span):
+        a, b = span
         out[a:b] = _fir_span(x, 0, taps, a, b)
+
+    _map(block, _spans(len(x)))
     return out
 
 
@@ -316,6 +393,8 @@ def air_exciter(x: np.ndarray, sr: int, air_rel_db: float = -31.5,
     breathes with the voice and vanishes in gaps. Level is set relative to the
     300 Hz-3 kHz speech core. Deterministic (fixed seed).
     """
+    from scipy import signal
+
     sos_env = signal.butter(4, [4000, 8000], btype="band", fs=sr, output="sos")
     sos_air = signal.butter(4, [lo, min(hi, sr / 2 * 0.98)], btype="band",
                             fs=sr, output="sos")
@@ -443,26 +522,210 @@ def speech_gate_gain(key: np.ndarray, sr: int = 48000,
     return lambda x: _apply_gain(x, lambda a, b: np.interp(np.arange(a, b), centers, gains))
 
 
+def _frame_levels(x: np.ndarray, sr: int, hop: int,
+                  win: int) -> tuple[np.ndarray, np.ndarray]:
+    """Mean square and spectral centroid of each frame [k*hop, k*hop + win)."""
+    k = max(0, (len(x) - win) // hop + 1)
+    level, centroid = np.empty(k), np.empty(k)
+    window = np.hanning(win)
+    freqs = np.fft.rfftfreq(win, 1 / sr)
+
+    def rows(span):                                     # frames [k0, k1)
+        k0, k1 = span
+        seg = x[k0 * hop:(k1 - 1) * hop + win].astype(np.float64)
+        frames = np.lib.stride_tricks.sliding_window_view(seg, win)[::hop]
+        level[k0:k1] = (frames ** 2).mean(axis=1)
+        power = np.abs(np.fft.rfft(frames * window, axis=1)) ** 2
+        centroid[k0:k1] = power @ freqs / (power.sum(axis=1) + 1e-20)
+
+    # FRAME_ROWS at a time within each BLOCK, a short last piece joining the one
+    # before: Accelerate rounds `power @ freqs` differently for 7 rows or fewer,
+    # so no piece may be shorter than the block-at-once version's last one was.
+    spans, per = [], max(1, BLOCK // hop)
+    for b0 in range(0, k, per):
+        b1 = min(k, b0 + per)
+        starts = list(range(b0, b1, FRAME_ROWS))
+        if len(starts) > 1 and b1 - starts[-1] < FRAME_ROWS:
+            starts.pop()
+        spans += zip(starts, starts[1:] + [b1])
+    _map(rows, spans)
+    return level, centroid
+
+
+def _a_weighting(sr: int):
+    """IEC 61672 A-weighting as second-order sections: how much each frequency counts
+    toward how loud a sound seems."""
+    from scipy import signal
+
+    f1, f2, f3, f4 = 20.598997, 107.65265, 737.86223, 12194.217
+    num = [(2 * np.pi * f4) ** 2 * 10 ** (1.9997 / 20), 0, 0, 0, 0]
+    den = np.polymul([1, 4 * np.pi * f4, (2 * np.pi * f4) ** 2], [1, 4 * np.pi * f1, (2 * np.pi * f1) ** 2])
+    den = np.polymul(np.polymul(den, [1, 2 * np.pi * f3]), [1, 2 * np.pi * f2])
+    return signal.zpk2sos(*signal.bilinear_zpk(*signal.tf2zpk(num, den), sr))
+
+
+def _a_weighted_levels(x: np.ndarray, sr: int, hop: int, win: int) -> np.ndarray:
+    """Mean square of each frame [k*hop, k*hop + win) of x, A-weighted."""
+    from scipy import signal
+
+    sos = _a_weighting(sr)
+    k = max(0, (len(x) - win) // hop + 1)
+    level = np.empty(k)
+    margin = sr // 2                    # time for the filter's 20 Hz poles to settle
+
+    def rows(span):                     # frames [k0, k1)
+        k0, k1 = span
+        a, b = k0 * hop, (k1 - 1) * hop + win
+        s0 = max(0, a - margin)
+        y = signal.sosfilt(sos, x[s0:b].astype(np.float64))[a - s0:]
+        sums = np.concatenate([[0.0], np.cumsum(y * y)])
+        starts = np.arange(k1 - k0) * hop
+        level[k0:k1] = (sums[starts + win] - sums[starts]) / win
+
+    per = max(1, BLOCK // hop)
+    _map(rows, [(k0, min(k, k0 + per)) for k0 in range(0, k, per)])
+    return level
+
+
+def breath_gain(x: np.ndarray, speech_prob: np.ndarray, sr: int = 48000,
+                prob_hop_s: float = 0.032) -> tuple[Callable[[np.ndarray], np.ndarray], int]:
+    """The breaths between phrases (breath_frames), taken down to the level of the
+    pauses around them. Returns the gain as a function of a signal of x's length
+    (fixed, like speech_gate_gain's, so the voice stems still remix live) and the
+    number of breaths.
+
+    Levels are A-weighted, as you hear them: a breath's hiss sits where hearing is
+    keenest and the pauses' room tone mostly below it, so matched unweighted, the
+    breaths still sounded 3-5 dB over the pauses, and their loud parts 8."""
+    from scipy import ndimage
+
+    breath, rel, count = breath_frames(x, speech_prob, sr, prob_hop_s)
+    if not breath.any():
+        return (lambda y: y), 0
+    hop, win = sr // 100, sr // 25
+    heard = 10 * np.log10(_a_weighted_levels(x, sr, hop, win)[:len(rel)] + 1e-20)
+    quiet = ~breath & (rel < -30)
+    overall = float(np.median(heard[quiet])) if quiet.any() else float(np.min(heard))
+    # Each breath's pauses are the ones within 2 s of it, while there are enough of them:
+    # a room can be quieter in one part of a recording than another.
+    floor = np.full(len(rel), overall)
+    for found in ndimage.find_objects(ndimage.label(breath)[0]):
+        a, b = found[0].start, found[0].stop
+        near = heard[max(0, a - 200):b + 200][quiet[max(0, a - 200):b + 200]]
+        if near.size >= 20:
+            floor[a:b] = np.median(near)
+    g = np.where(breath, np.minimum(0.0, floor - heard), 0.0)
+    # 10 ms ramps, inside the breath, so the speech beside it keeps its level; each frame
+    # takes its neighbours' deepest gain first, so the ramps don't spare a loud frame.
+    g = ndimage.minimum_filter1d(g, 3)
+    g = np.where(breath, np.convolve(np.pad(g, 1, mode="edge"), np.ones(3) / 3, mode="valid"), 0.0)
+    centers = np.arange(len(g)) * hop + win / 2
+    return (lambda y: _apply_gain(y, lambda a, b: 10 ** (np.interp(np.arange(a, b), centers, g) / 20))), count
+
+
+def breath_frames(x: np.ndarray, speech_prob: np.ndarray, sr: int = 48000,
+                  prob_hop_s: float = 0.032) -> tuple[np.ndarray, np.ndarray, int]:
+    """Which 10 ms frames of `x` are breaths between phrases.
+
+    Restoring engines rebuild the breaths that Adobe's model leaves out, and in a
+    clean voice they sound like noise. A 10 ms frame is breath when it is clear
+    of sustained pitch, sits 12 dB or more below the speech, has an inhale's
+    spectrum (centred 0.7-3.5 kHz; below -35 dB it is too quiet to tell) and
+    Silero (`speech_prob`, one value per `prob_hop_s`) hears no speech in it.
+    Runs of those frames with 120 ms or more you can hear are breaths, widened by
+    up to 60 ms into the quiet beside them, where Silero still hears the word
+    before. On a 200 s voice-over this took out 89% of the breath time Adobe
+    silenced, and under a second of what Adobe kept.
+
+    Returns the breath frames (frame i starts at i * sr // 100), every frame's
+    level in dB re the speech, and the number of breaths.
+    """
+    from scipy import ndimage
+
+    hop, win = sr // 100, sr // 25
+    level, centroid = _frame_levels(x, sr, hop, win)
+    voiced = track_f0(x, sr)[1]                         # the same 10 ms frames
+    k = min(len(level), len(voiced))
+    if k < 4 or not len(speech_prob):
+        return np.zeros(max(k, 0), bool), np.full(max(k, 0), -120.0), 0
+    level, centroid, voiced = level[:k], centroid[:k], voiced[:k]
+    rel = 10 * np.log10(level + 1e-20) - active_speech_db(x, sr)
+    prob = speech_prob[np.minimum((np.arange(k) * 0.01 / prob_hop_s).astype(int), len(speech_prob) - 1)]
+
+    # Pitch in a voice is loud or low; the tracker's stray pitch in breath noise is neither.
+    voiced &= (centroid < 1500) | (rel > -15)
+    sustained = ndimage.binary_opening(voiced, structure=np.ones(4, bool))       # 40 ms or more
+    near_voice = ndimage.binary_dilation(sustained, iterations=3)                # within 30 ms
+    safe = ~near_voice & (rel < -12) & (prob < 0.8)
+    breathy = ((centroid > 700) & (centroid < 3500)) | (rel < -35)
+    candidate = ndimage.binary_closing(safe & (rel > -55) & breathy, iterations=3) & safe
+    labels, _ = ndimage.label(candidate)
+    breath = np.zeros(k, bool)
+    for i, found in enumerate(ndimage.find_objects(labels), 1):
+        run = labels[found[0]] == i
+        if (rel[found[0]][run] > -40).sum() >= 12:                   # 120 ms you can hear
+            breath[found[0]] |= run
+    count = int(ndimage.label(breath)[1])
+    breath |= ndimage.binary_dilation(breath, iterations=6) & ~near_voice & (rel < -20)
+    # A lip smack or tongue click beside a breath is too loud to pass as breath (-12 dB
+    # above), and with the breath taken down it stands out all the more. Up to 120 ms of
+    # unpitched sound (a click, smeared over the 40 ms frames) with a breath on one side,
+    # breath or a pause on the other, and no speech starting within 150 ms after it goes
+    # with the breath. Clicks just before a word are left: they can't be told from its
+    # first consonant.
+    quiet = rel < -35
+    labels, _ = ndimage.label(~breath & ~quiet)
+    for found in ndimage.find_objects(labels):
+        a, b = found[0].start, found[0].stop
+        if b - a > 12 or a == 0 or b >= k:
+            continue
+        before = breath[a - 1] or quiet[max(0, a - 10):a].all()
+        after = breath[b] or quiet[b:b + 10].all()
+        if (breath[a - 1] or breath[b]) and before and after \
+                and not sustained[a:b + 15].any() and prob[a:b + 15].max() < 0.8:
+            breath[a:b] = True
+    return breath, rel, count
+
+
 def restoration_tone(x: np.ndarray, sr: int = 48000, hp_hz: float = 40.0,
-                     shelf_db: float = -6.0, lp_hz: float = 20000.0) -> np.ndarray:
+                     shelf_db: float = -6.0, lp_hz: float = 20000.0,
+                     low_shelf_db: float = -3.0, low_shelf_hz: float = 150.0,
+                     low_cut_hz: float = 60.0) -> np.ndarray:
     """Tone correction for Sidon output, measured against Adobe references.
 
     Sidon's midrange tracks Adobe within each clip's natural variance, but it is
     consistently 6-8 dB hotter above 12 kHz (audible as fizz/haze) and extends
     to Nyquist where Adobe rolls off at ~20 kHz. It also regenerates sub-40 Hz
     rumble that dominates the gap noise floor.
+
+    Its low end comes out 4-7 dB fuller than the input below 500 Hz, most at
+    80-125 Hz, which sounds boomy (Adobe's does the same). A shelf of
+    `low_shelf_db` below `low_shelf_hz`, easing to flat an octave above, and a
+    12 dB/octave roll-off below `low_cut_hz` ease it, chosen by ear over stronger
+    cuts and over matching the input's own balance.
     """
+    from scipy import signal
+
     sos = signal.butter(2, hp_hz, "high", fs=sr, output="sos")
-    fr = np.array([0.0, 11000.0, 14000.0, lp_hz - 500.0, lp_hz + 1000.0, sr / 2])
-    g = np.array([0.0, 0.0, shelf_db, shelf_db, -60.0, -60.0])
-    taps = design_match_fir(fr, g, sr)
+    fr = np.geomspace(10.0, sr / 2, 600)
+    high = np.interp(fr, [0.0, 11000.0, 14000.0, lp_hz - 500.0, lp_hz + 1000.0, sr / 2],
+                     [0.0, 0.0, shelf_db, shelf_db, -60.0, -60.0])
+    octave = np.clip(np.log2(fr / low_shelf_hz), 0.0, 1.0)
+    low = low_shelf_db * (0.5 + 0.5 * np.cos(np.pi * octave))
+    low_cut = -10 * np.log10(1 + (low_cut_hz / fr) ** 4)           # Butterworth, 2nd order
+    # Enough taps to follow the curve at 60 Hz (~3 Hz resolution).
+    taps = design_match_fir(fr, high + low + low_cut, sr, ntaps=16383)
     n = len(x)
     margin = len(taps) + sr // 2            # the FIR's reach plus time for the high-pass to settle
     out = np.empty(n, np.float32)
-    for a, b in _spans(n):
+
+    def block(span):
+        a, b = span
         s0, s1 = max(0, a - margin), min(n, b + margin)
         hp = signal.sosfiltfilt(sos, x[s0:s1].astype(np.float64))
         out[a:b] = _fir_span(hp, s0, taps, a, b)
+
+    _map(block, _spans(n))
     return out
 
 
@@ -475,7 +738,7 @@ def music_to_voice_db(accomp: np.ndarray, vocals: np.ndarray, sr: int = 48000) -
     that persist >= ~250 ms but move around over the clip. Stationary peaks
     (hum, fan whine: same bins in most frames) and broadband noise are excluded.
     """
-    from scipy.ndimage import binary_opening, median_filter
+    from scipy.ndimage import binary_opening
 
     nper, hop = 8192, 2048
     # Pass 1: energy of every frame in the 100 Hz-6 kHz band.
@@ -491,7 +754,7 @@ def music_to_voice_db(accomp: np.ndarray, vocals: np.ndarray, sr: int = 48000) -
         p = (np.abs(Z) ** 2)[band][:, keep[k0:k0 + Z.shape[1]]]
         lp = 10 * np.log10(p + 1e-20)
         powers.append(p)
-        peaks.append((lp - median_filter(lp, size=(31, 1))) > 10)   # >10 dB above local floor
+        peaks.append((lp - _median_over_bins(lp, 31)) > 10)        # >10 dB above local floor
     p = np.concatenate(powers, axis=1)
     peak = np.concatenate(peaks, axis=1)
     held = binary_opening(peak, structure=np.ones((1, 6)))    # 6 hops ≈ 256 ms
@@ -500,6 +763,20 @@ def music_to_voice_db(accomp: np.ndarray, vocals: np.ndarray, sr: int = 48000) -
     a_rms = float(np.sqrt((accomp ** 2).mean()) + 1e-12)
     v_rms = float(np.sqrt((vocals ** 2).mean()) + 1e-12)
     return 20 * np.log10(a_rms / v_rms) + 10 * np.log10(frac + 1e-9)
+
+
+def _median_over_bins(lp: np.ndarray, k: int) -> np.ndarray:
+    """scipy.ndimage.median_filter(lp, size=(k, 1)) on scipy's far faster 1-D
+    filter: the columns, each padded as mode="reflect" pads it, go end to end in
+    one row, and no window reaches past its own column's padding."""
+    from scipy.ndimage import median_filter
+
+    if lp.size == 0:
+        return lp
+    h = k // 2
+    bins, cols = lp.shape
+    row = np.pad(lp, ((h, h), (0, 0)), mode="symmetric").T.reshape(-1)   # scipy's "reflect"
+    return median_filter(row, size=k).reshape(cols, bins + 2 * h)[:, h:h + bins].T
 
 
 def track_f0(x: np.ndarray, sr: int = 48000, fmin: float = 60.0, fmax: float = 400.0,
@@ -511,6 +788,8 @@ def track_f0(x: np.ndarray, sr: int = 48000, fmin: float = 60.0, fmax: float = 4
     are corrected by preferring half the lag when it correlates almost as
     well (harmonic_smooth treats octave-up errors as the dangerous kind).
     """
+    from scipy import signal
+
     sos = signal.butter(4, [fmin, 3000], btype="band", fs=16000, output="sos")
     n, hop = int(frame_s * 16000), int(hop_s * 16000)
     ylen = -(-len(x) // 3)                              # length at 16 kHz
@@ -525,12 +804,18 @@ def track_f0(x: np.ndarray, sr: int = 48000, fmin: float = 60.0, fmax: float = 4
     f0, corr, energy = np.empty(k), np.empty(k), np.empty(k)
     margin = 16000                                      # 1 s for the filters to settle
     per = max(1, BLOCK // (3 * hop))
-    for k0 in range(0, k, per):                         # frames [k0, k1), block by block
+
+    def block(k0):                                      # frames [k0, k0 + per)
         k1 = min(k, k0 + per)
         y0, y1 = max(0, k0 * hop - margin), min(ylen, (k1 - 1) * hop + n + margin)
         y = signal.resample_poly(x[3 * y0:3 * y1].astype(np.float64), 1, 3)
         y = signal.sosfiltfilt(sos, y)
-        frames = np.lib.stride_tricks.sliding_window_view(y, n)[k0 * hop - y0::hop][:k1 - k0]
+        view = np.lib.stride_tricks.sliding_window_view(y, n)[k0 * hop - y0::hop][:k1 - k0]
+        for j in range(0, len(view), FRAME_ROWS):
+            rows(k0 + j, view[j:j + FRAME_ROWS])
+
+    def rows(k0, frames):                               # frames k0, k0 + 1, ...
+        k1 = k0 + len(frames)
         frames = frames * window
         m = len(frames)
         ac = np.fft.irfft(np.abs(np.fft.rfft(frames, nfft)) ** 2, nfft)[:, :n]
@@ -547,6 +832,8 @@ def track_f0(x: np.ndarray, sr: int = 48000, fmin: float = 60.0, fmax: float = 4
         f0[k0:k1] = 16000.0 / (lag + np.clip(frac, -0.5, 0.5))
         corr[k0:k1] = b
         energy[k0:k1] = (frames ** 2).mean(axis=1)
+
+    _map(block, range(0, k, per))
     voiced = (corr > voicing) & (energy > np.quantile(energy, 0.3) * 0.1)
     return np.where(voiced, f0, 0.0), voiced
 
@@ -562,6 +849,8 @@ def harmonic_smooth(x: np.ndarray, sr: int = 48000, fmax: float = 3500.0,
     Measured: voiced periodicity +0.025 toward Adobe; -6 dB preferred by ear
     over -10 dB (which starts to sound processed).
     """
+    from scipy import fft as sp_fft
+
     f0, voiced = track_f0(x, sr)
     if not voiced.any():
         return x
@@ -610,13 +899,19 @@ def declick(x: np.ndarray, sr: int = 48000, frame_ms: float = 2.5,
     n = len(x) // fr
     if n < 10:
         return x
+    from scipy import signal
+
     sos = signal.butter(4, 1000, "high", fs=sr, output="sos")
     margin = 100 * fr                                       # the high-pass settles in ~1 ms
     e = np.empty(n)
-    for a, b in _spans(n * fr, align=fr):                   # energy of each 1 kHz high-passed frame
+
+    def block(span):                                        # energy of each 1 kHz high-passed frame
+        a, b = span
         s0, s1 = max(0, a - margin), min(len(x), b + margin)
         y = signal.sosfiltfilt(sos, x[s0:s1].astype(np.float64))[a - s0:b - s0]
         e[a // fr:b // fr] = (y.reshape(-1, fr) ** 2).mean(axis=1)
+
+    _map(block, _spans(n * fr, align=fr))
     edb = 10 * np.log10(e + 1e-14)
     c0, c1 = int(ctx_ms[0] / frame_ms), int(ctx_ms[1] / frame_ms)
     kern = np.ones(c1 - c0 + 1) / (c1 - c0 + 1)

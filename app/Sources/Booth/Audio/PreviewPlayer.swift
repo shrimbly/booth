@@ -426,8 +426,14 @@ final class PreviewPlayer: PreviewPlaying {
                 return nil
             }
             var level = SpeechLevel(sampleRate: c.sampleRate)
-            for frame in 0..<min(c.frameCount, v.frameCount) {
-                level.add(clean: c.sample(frame), vocals: v.sample(frame))
+            // The engine's stems are mono float32, read where they lie; anything else sample by sample.
+            let readInPlace = c.withMonoFloat32Samples { clean in
+                v.withMonoFloat32Samples { vocals in level.add(clean: clean, vocals: vocals) } != nil
+            } ?? false
+            if !readInPlace {
+                for frame in 0..<min(c.frameCount, v.frameCount) {
+                    level.add(clean: c.sample(frame), vocals: v.sample(frame))
+                }
             }
             return level
         } catch {

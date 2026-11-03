@@ -21,7 +21,7 @@ struct DoneScreen: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let video = model.shownVideo {
-                VideoPreview(video: video, isPlaying: model.isPlaying, playhead: model.playhead, onTap: model.togglePlay)
+                PlayheadVideoPreview(model: model, video: video)
                     .overlay(alignment: .bottom) { PictureControls(model: model) }
                     .clipShape(RoundedRectangle(cornerRadius: VideoPreview.cornerRadius, style: .continuous))
                     .padding(.horizontal, -Self.pictureReach.side)
@@ -43,9 +43,7 @@ struct DoneScreen: View {
             if model.shownVideo == nil {
                 HStack(spacing: 8) {
                     PlayButton(isPlaying: model.isPlaying, action: model.togglePlay)
-                    Waveform(
-                        levels: model.waveformLevels, playhead: model.playhead,
-                        isComparing: model.isComparing, onSeek: model.seek(to:))
+                    PlayheadWaveform(model: model)
                 }
                 .padding(.top, 12)
                 .transition(.swap(reduceMotion: reduceMotion, arriving: .revealing))
@@ -185,13 +183,41 @@ private struct PictureControls: View {
                 .allowsHitTesting(false)
             HStack(spacing: 8) {
                 PlayButton(isPlaying: model.isPlaying, onPicture: true, action: model.togglePlay)
-                Waveform(
-                    levels: model.waveformLevels, playhead: model.playhead,
-                    isComparing: model.isComparing, onPicture: true, onSeek: model.seek(to:))
+                PlayheadWaveform(model: model, onPicture: true)
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 9)
         }
+    }
+}
+
+// The playhead moves 30 times a second while playing. Only these two views read it, so the rest
+// of the screen is not rebuilt with it.
+
+/// The picture, following the playhead.
+private struct PlayheadVideoPreview: View {
+    let model: AppModel
+    let video: PreviewVideo
+
+    var body: some View {
+        VideoPreview(video: video, isPlaying: model.isPlaying, playhead: model.playhead, onTap: model.togglePlay)
+    }
+}
+
+/// The waveform at the playhead. Its bars are redrawn only when one changes colour or the
+/// percent read out changes (`Waveform`'s `==`).
+private struct PlayheadWaveform: View {
+    let model: AppModel
+    var onPicture = false
+
+    var body: some View {
+        let levels = model.waveformLevels
+        let playhead = model.playhead
+        Waveform(
+            levels: levels, playedBars: Waveform.playedBars(playhead: playhead, count: levels.count),
+            percent: Formatting.percent(playhead), isComparing: model.isComparing, onPicture: onPicture,
+            playhead: { [model] in model.playhead }, onSeek: model.seek(to:))
+            .equatable()
     }
 }
 

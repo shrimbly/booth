@@ -61,6 +61,16 @@ final class MappedStem: @unchecked Sendable {
     var frameCount: Int { layout.frameCount }
     var sampleRate: Double { layout.sampleRate }
 
+    /// Calls `body` with the samples where they lie when the file is mono float32, as the engine
+    /// writes its stems; nil, without calling it, for any other layout.
+    func withMonoFloat32Samples<Result>(_ body: (UnsafeBufferPointer<Float>) -> Result) -> Result? {
+        guard layout.format == .float32, layout.channels == 1, let start = bytes.baseAddress,
+              layout.dataOffset % MemoryLayout<Float>.alignment == 0
+        else { return nil }
+        let samples = start.advanced(by: layout.dataOffset).bindMemory(to: Float.self, capacity: layout.frameCount)
+        return body(UnsafeBufferPointer(start: samples, count: layout.frameCount))
+    }
+
     /// The sample at `frame`, mixed down to mono. `frame` must be below `frameCount`.
     @inline(__always)
     func sample(_ frame: Int) -> Float {

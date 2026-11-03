@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import BoothCore
 
@@ -109,5 +110,40 @@ struct WorkingTextTests {
         // Crisp only well inside it.
         let sharp = WorkingText.nameLayers.first { $0.blur == 0 }!
         #expect(sharp.fade.alpha(at: -48) == 1 && sharp.fade.alpha(at: -34) == 0)
+    }
+}
+
+@Suite("Progress glide")
+struct ProgressGlideTests {
+    let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+    func at(_ seconds: Double) -> Date { start.addingTimeInterval(seconds) }
+
+    @Test func eachChangeGlidesInLinearly() {
+        var glide = ProgressGlide(seconds: 0.25)
+        glide.add(0.2, at: start)
+        #expect(abs(glide.value(target: 0.3, at: at(0)) - 0.1) < 1e-12)
+        #expect(abs(glide.value(target: 0.3, at: at(0.1)) - 0.18) < 1e-12)
+        #expect(glide.value(target: 0.3, at: at(0.25)) == 0.3)
+        #expect(glide.value(target: 0.3, at: at(5)) == 0.3)
+    }
+
+    @Test func overlappingChangesAddUp() {
+        var glide = ProgressGlide(seconds: 0.25)
+        glide.add(0.1, at: start)
+        glide.add(0.1, at: at(0.1))
+        // 0.3 less what is left of each: 0.1 · (1 − 0.8) and 0.1 · (1 − 0.4).
+        #expect(abs(glide.value(target: 0.3, at: at(0.2)) - 0.22) < 1e-12)
+        #expect(glide.value(target: 0.3, at: at(0.35)) == 0.3)
+    }
+
+    @Test func finishedChangesAreForgotten() {
+        var glide = ProgressGlide(seconds: 0.25)
+        glide.add(0.1, at: start)
+        glide.add(0.1, at: at(0.3))
+        // Only the second is still gliding.
+        #expect(abs(glide.value(target: 0.5, at: at(0.3)) - 0.4) < 1e-12)
+        glide.add(0, at: at(1))
+        #expect(glide.value(target: 0.5, at: at(0.3)) == 0.5)
     }
 }

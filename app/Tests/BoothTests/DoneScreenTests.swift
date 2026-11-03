@@ -132,6 +132,27 @@ struct DoneScreenTests {
         #expect(h.model.effectiveScreen == .done)
         #expect(!h.model.canShowVideo)
     }
+
+    /// The waveform colours bars by count; each must be played exactly when it is left of the
+    /// playhead, as measured bar by bar.
+    @Test func playedBarsAreThoseLeftOfThePlayhead() {
+        for count in [0, 1, 7, WaveformBars.count] {
+            for step in 0...1_000 {
+                let playhead = Double(step) / 1_000
+                let played = Waveform.playedBars(playhead: playhead, count: count)
+                for index in 0..<count {
+                    #expect((index < played) == (Double(index) / Double(count) < playhead))
+                }
+            }
+            // Exactly on a bar's edge, and just either side of it.
+            for index in 0..<count {
+                let edge = Double(index) / Double(count)
+                for playhead in [edge.nextDown, edge, edge.nextUp] {
+                    #expect(Waveform.playedBars(playhead: playhead, count: count) == (0..<count).filter { Double($0) / Double(count) < playhead }.count)
+                }
+            }
+        }
+    }
 }
 
 /// A stems folder with a manifest and an output video on disk, as a real video job leaves them.

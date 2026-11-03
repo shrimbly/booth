@@ -123,6 +123,8 @@ def _add_enhance_args(p: argparse.ArgumentParser) -> None:
                       help="keep Sidon's raw harmonics (no harmonic smoothing)")
     tune.add_argument("--no-declick", action="store_true",
                       help="keep mouth and tongue clicks (sidon)")
+    tune.add_argument("--no-breaths", action="store_true",
+                      help="keep the breaths between phrases")
     tune.add_argument("--no-expander", action="store_true",
                       help="no pause gate on the voice channel")
     tune.add_argument("--no-polish", action="store_true",
@@ -176,7 +178,6 @@ def _quiet_libraries() -> None:
     # Public models don't need a token; huggingface_hub warns anyway.
     os.environ.setdefault("HF_HUB_VERBOSITY", "error")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    warnings.filterwarnings("ignore", message=r".*torchaudio\.backend\.common.*")
     warnings.filterwarnings("ignore", category=FutureWarning)
 
 
@@ -194,7 +195,7 @@ def _settings(args: argparse.Namespace, progress: bool):
         engine=args.engine, polish=not args.no_polish,
         split_music=not args.no_split, low_gate=not args.no_low_gate,
         air=not args.no_air, level=not args.no_leveler,
-        smooth=not args.no_smooth, declick=not args.no_declick,
+        smooth=not args.no_smooth, declick=not args.no_declick, breaths=not args.no_breaths,
         match_eq=not args.no_match_eq, expander=not args.no_expander,
         linear=args.linear, loudness=loudness,
         device=args.device, crf=args.crf, audio_only=args.audio_only,
@@ -280,6 +281,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import os
+    # OpenMP worker threads sleep as soon as a parallel region ends. That is the
+    # default of torch 2.15's libomp, but torch 2.2's spun for 200 ms first, and
+    # demucs runs thousands of short regions: spinning, it takes about three
+    # times the CPU for the same output (100 vs 37 CPU-s on 60 s of audio),
+    # cores the Sidon runner loading its models beside it needs. Set before
+    # torch starts OpenMP, so a torch update can't bring the spinning back; the
+    # runner inherits it.
+    os.environ.setdefault("KMP_BLOCKTIME", "0")
     argv = list(sys.argv[1:] if argv is None else argv)
     from .tools import ensure_tool_path
     ensure_tool_path()

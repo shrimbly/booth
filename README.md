@@ -2,6 +2,13 @@
 
 **Studio-quality voice for your recordings, enhanced on your Mac.**
 
+[Website](https://getbooth.xyz) · [Download for Mac](https://github.com/shrimbly/booth/releases/latest/download/Booth.dmg) · `brew install shrimbly/booth/booth`
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/booth-dark.png">
+  <img src="docs/images/booth-light.png" width="320" alt="Booth's popover after enhancing interview-take3.mp4: a player with its waveform, Hold ⌥ to compare, and the Speech, Background and Music levels">
+</picture>
+
 Booth cleans up the voice in any video or audio file. It lives in the menu bar: drop a recording on
 it and `<name>-enhanced` appears beside the original, with the voice restored, the room and the
 noise turned down, and the picture left as it was. It is the same kind of model as Adobe Podcast's
@@ -23,20 +30,22 @@ $ booth interview.mp4 podcast.wav
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later on Apple silicon, with 16 GB of memory or more. The voice model needs
-  about 12 GB while it works, however long the recording.
-- About 3 GB of disk space for the voice models and the engine, downloaded on first use.
-- [ffmpeg](https://ffmpeg.org), to read and write audio and video. Homebrew installs it with Booth.
+- macOS 14 (Sonoma) or later on Apple silicon, with 16 GB of memory or more. Enhancing a recording
+  takes about 5 GB at its peak: 4.8 GB for 2.5 minutes, 5.6 GB for 10 minutes.
+- About 2 GB of disk space for the voice models and the engine, downloaded on first use.
+- [ffmpeg](https://ffmpeg.org), to read and write audio and video. Booth uses yours if you have
+  one, and otherwise downloads its own during setup (57 MB).
 
 ## Install
 
 ### Download
 
-Download `Booth.dmg` from the website (or the [latest release](https://github.com/shrimbly/booth/releases/latest)),
-open it, and drag Booth to Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
+Download `Booth.dmg` from the [website](https://getbooth.xyz) (or the
+[latest release](https://github.com/shrimbly/booth/releases/latest)), open it, and drag Booth to
+Applications. Then open Booth from Applications. It lives in the menu bar, not in the Dock.
 
 The first time, Booth sets up its engine and downloads the voice models: about 1.1 GB, once. If
-you don't have ffmpeg, install it with [Homebrew](https://brew.sh): `brew install ffmpeg`.
+you don't have ffmpeg, it downloads that too.
 
 To use `booth` in Terminal as well, link the copy inside Booth onto your `PATH`:
 
@@ -59,7 +68,7 @@ your `PATH`, and installs ffmpeg. `brew upgrade` keeps both up to date, and
 Without the app, install the `booth` command with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-brew install uv ffmpeg
+brew install uv
 uv tool install --python 3.11 git+https://github.com/shrimbly/booth   # or `.` from a checkout
 booth setup                                                           # optional: download the models now
 ```
@@ -140,7 +149,7 @@ missing.
 | `-v`, `--verbose` | off | Log each processing step and its timing |
 | `-q`, `--quiet` | off | No progress; print only the finished files, errors and engine fallbacks |
 
-`booth enhance --help` lists the fine-tuning switches (`--no-declick`, `--no-smooth`,
+`booth enhance --help` lists the fine-tuning switches (`--no-breaths`, `--no-declick`, `--no-smooth`,
 `--lufs N` from −70 to −5, and others). [How it works](docs/how-it-works.md) explains what each one does.
 
 | Exit status | Meaning |
@@ -154,8 +163,10 @@ Set `BOOTH_DEBUG=1` to see the full error behind a one-line failure message.
 
 ### Speed
 
-A 3-minute video takes about 1.8 minutes on an M5 Pro: music separation and voice restoration take
-about 40% each. `--no-split` roughly halves that when the recording has no music.
+A 3-minute video takes about 40 seconds on an M5 Pro, and a 10-minute recording just under 2
+minutes. Music separation takes over a third of that and voice restoration about half; Sidon loads
+its models while the music is being separated. `--no-split` saves about a quarter when the
+recording has no music.
 
 ## How it works
 
@@ -188,10 +199,10 @@ each step is there, the calibration of the other engines, and the benchmark.
 | Script | What it does |
 |---|---|
 | `app/scripts/build-app.sh` | Builds `app/build/Booth.app`. Add `--dist` for a build meant for other Macs, `--sign IDENTITY` to sign with a Developer ID. |
-| `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`; `--sign` and `--notarize` sign and notarize the image. |
+| `app/scripts/make-dmg.sh` | Packages a built app as `Booth-<version>.dmg`, in the window `packaging/dmg` lays out (dmgbuild, run through uv); `--sign` and `--notarize` sign and notarize the image. |
 | `app/scripts/release.sh` | Runs the tests, then builds, signs, notarizes and packages a release into `dist/`. `--publish` uploads it to GitHub and updates the Homebrew tap. |
 | `app/scripts/set-release-secrets.sh` | Puts the signing certificate, the notary key and the tap's deploy key into the secrets the release workflow uses. |
-| `site/tools/make-demo.py` | Rebuilds the website's before/after demo from two recordings. |
+| `site/tools/make-demo-reel.py` | Cuts the website's demo reels (the picture, both sound tracks and the timeline's marks) from recordings Booth has enhanced. |
 | `site/tools/make-demo-video.sh` | Renders the website's demo video from Booth's real popover views. |
 
 The version comes from `pyproject.toml` (with `__version__` in `src/booth/__init__.py` to
@@ -255,14 +266,27 @@ as a deploy key. Each works on its own, so after renewing the certificate, run j
 
 ### Website
 
-`site/` is a single static page: one sentence with a player for a 30-second before/after clip
-(hold ⌥ to hear the original) and a short video of Booth at work behind "menu bar". To try it,
-open `site/index.html`, or serve the folder with `python3 -m http.server -d site`. It deploys to
-any static host as it is: the download button links to `Booth.dmg` on the latest GitHub release.
-To replace the before/after clip:
+`site/` is a single static page: one sentence whose ▶ opens a 49-second walkthrough of Booth,
+recorded in a noisy room (the picture over the original's and Booth's waveforms; hold ⌥ to hear
+the original, and each breath, click or background noise Booth removed is marked as it passes),
+and a short video of Booth at work behind "menu bar". To try it, serve the folder with a server
+that answers range requests, which the reel's video needs to seek (`npx http-server site`, say).
+Vercel deploys it to [getbooth.xyz](https://getbooth.xyz) from every push to `main` (the project's
+root directory is `site/`; `site/.vercelignore` keeps `tools/` off the web). The download button
+links to `Booth.dmg` on the latest GitHub release. Vercel Web Analytics counts page views (without
+cookies): it's switched on in the project's settings, and its script,
+`/_vercel/insights/script.js`, only exists on Vercel's deployments. The link-preview card,
+`site/assets/og.png`, is `site/tools/og-card.html` rendered by Chrome; the command is at the top
+of that file. The walkthrough is a reel, built from the author's own recordings, which stay out of
+the repository; `site/tools/make-demo-reel.py` lists each reel's sections. `walkthrough` is the
+one the page opens with; `reel`, sections of three screen recordings, plays from its "More demos"
+button. Enhance each recording keeping the stems, survey it for sections where Booth fixed several
+things, and build:
 
 ```bash
-python3 site/tools/make-demo.py original.wav enhanced.wav --start 12 --length 30
+.venv/bin/booth enhance talk.mp4 --audio-only --keep-stems runs/talk-stems -o runs/talk-booth.wav
+.venv/bin/python site/tools/make-demo-reel.py survey runs talk talk.mp4
+.venv/bin/python site/tools/make-demo-reel.py build runs walkthrough
 ```
 
 The video is drawn by Booth itself, from its real popover views, so re-render it after the UI
@@ -275,8 +299,9 @@ DEMO_POSTER=still.jpg site/tools/make-demo-video.sh
 
 ## License
 
-MIT; see [LICENSE](LICENSE). Booth.app also carries uv (MIT or Apache 2.0) and the Geist Serif
-typeface (SIL Open Font License), and the engine downloads these models under their own licenses:
-Sidon and w2v-BERT 2.0 (MIT), Demucs (MIT), DeepFilterNet (MIT or Apache 2.0) and ClearVoice
-MossFormer2 (Apache 2.0). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and the
+MIT; see [LICENSE](LICENSE). Booth.app also carries uv (MIT or Apache 2.0), the Geist Serif
+typeface (SIL Open Font License), Silero VAD's speech detector (MIT) and DeepFilterNet3 (MIT or
+Apache 2.0). The engine downloads these models under their own licenses: Sidon and w2v-BERT 2.0
+(MIT), Demucs (MIT) and ClearVoice MossFormer2 (Apache 2.0), and on a Mac without ffmpeg, a build
+of FFmpeg (GPL 3.0). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the details, and the
 app has a copy of it and of `LICENSE` in `Contents/Resources`.

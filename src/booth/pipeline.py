@@ -29,6 +29,7 @@ Loudness: Adobe normalizes so the speech component lands at ~-29 LUFS
 
 from __future__ import annotations
 
+import contextlib
 import importlib.resources
 import math
 import os
@@ -41,11 +42,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import atomic, dsp
+from . import atomic, dsp, malloc
 from . import audio as A
 from . import stems as stemsdir
-from .engines import deepfilter
-from .progress import NullReporter, Reporter
+from .engines import deepfilter, sidon
+from .progress import DEFAULT_COSTS, NullReporter, Reporter
 
 # Calibration constants (derived from the Adobe reference pair by calibration
 # scripts that have since been removed). Adobe's output at sliders 54/10/10 measured a
@@ -83,6 +84,7 @@ class Settings:
     level: bool = True              # slow AGC on the voice channel
     smooth: bool = True             # harmonic smoothing (generative engines)
     declick: bool = True            # mouth/tongue click removal (generative engines)
+    breaths: bool = True            # take breaths between phrases down to the pauses' level
     linear: bool = False            # bypass calibrated slider curves
     loudness: str | float | None = "auto"   # "auto" | LUFS float | None
     device: str = "cpu"
@@ -111,16 +113,16 @@ class OutputIsInputError(ValueError):
 
 
 def _restore_sidon(src: np.ndarray, vocals: np.ndarray, log,
-                   report: Reporter) -> tuple[np.ndarray, np.ndarray]:
-    """Sidon restoration, aligned and level-matched; returns (clean, key).
+                   job: sidon.Job) -> tuple[np.ndarray, np.ndarray]:
+    """Sidon restoration of `src` by a released `job`, aligned and
+    level-matched; returns (clean, key).
 
     key = DF3 on the vocals stem: the speech-presence signal for the gate and
-    the reference for the background decomposition and output level.
+    the reference for the background decomposition and output level. It is
+    computed while the runner restores.
     """
-    from .engines import sidon
     key = deepfilter.enhance(vocals, A.SR)
-    log(f"  restoring voice with Sidon (~{len(src) / A.SR * 0.3:.0f}s)…")
-    restored = sidon.enhance(src, A.SR, log=log, on_progress=report.signal)
+    restored = job.result()
     lag = dsp.envelope_lag(src, restored, A.SR)
     restored = dsp.shift(restored, lag)
     if abs(lag) > A.SR // 1000:          # only worth mentioning above 1 ms
@@ -309,50 +311,80 @@ def enhance_file(inp: Path, out: Path | None, st: Settings, log=print,
 
     report.begin("decode")
     stage("decode")
-    orig = A.decode(inp)
+    orig = A.decode(inp, info=info)
     if orig.size == 0:
         raise A.FfmpegError(f"no audio samples could be decoded from {inp}")
     if len(orig) < MIN_SECONDS * A.SR:
         raise TooShortError(f"{inp.name} is too short to enhance. Nothing was changed.")
     done("decode")
 
-    if st.split_music:
-        report.begin("separate")
-        stage("separate (demucs)")
-        from .separate import split_music
-        vocals, accomp = split_music(orig, A.SR, device=st.device, progress=st.progress)
-        done("separate (demucs)")
-    else:
-        vocals, accomp = orig, None         # no music channel at all
+    # The Sidon runner starts now and loads its models during demucs, but only
+    # restores once demucs is done: run together, the two would just compete for
+    # the same cores. Leaving this block, however it is left, stops the runner
+    # and removes its files.
+    with contextlib.ExitStack() as runner:
+        job = job_error = None
+        if st.engine == "sidon":
+            try:
+                # Raw input restores best — even under loud music (UTMOS 3.55 vs
+                # 3.25 on demucs vocals): separation artifacts hurt it more than
+                # music does. demucs only feeds the music slider and the gate key.
+                job = runner.enter_context(sidon.Job(orig, A.SR, on_progress=report.signal,
+                                                      log=log))
+            except Exception as e:          # falls back below, like a failed restore
+                job_error = e
 
-    music_present = False
-    if st.split_music:
-        mv_db = dsp.music_to_voice_db(accomp, vocals, A.SR)
-        music_present = mv_db >= MUSIC_GATE_DB
-        log(f"  (music: {mv_db:.0f} dB re voice — "
-            f"{'kept' if music_present else 'none detected, channel muted'})")
-    # Music gate: on speech-only content the accompaniment stem is demucs
-    # leakage (noise, hum), not music — muting it keeps the music slider from
-    # reintroducing hiss. Detected by held-note content, not stem level.
-    if not music_present:
-        accomp = None                       # a muted channel adds nothing to the mix
+        if st.split_music:
+            report.begin("separate")
+            stage("separate (demucs)")
+            from .separate import split_music
+            vocals, accomp = split_music(orig, A.SR, device=st.device, progress=st.progress)
+            # Unmap demucs's freed activations, which malloc would otherwise keep
+            # cached (about 1 GB on 150 s) while the Sidon runner peaks beside us.
+            malloc.release_cached()
+            done("separate (demucs)")
+        else:
+            vocals, accomp = orig, None         # no music channel at all
 
-    report.begin("restore")
-    engine_name = st.engine
-    used_engine = st.engine
-    key = None              # speech-presence key for the gate (generative engines)
-    stage("enhance")
-    if st.engine == "sidon":
-        try:
-            # Raw input restores best — even under loud music (UTMOS 3.55 vs
-            # 3.25 on demucs vocals): separation artifacts hurt it more than
-            # music does. demucs only feeds the music slider and the gate key.
-            clean, key = _restore_sidon(orig, vocals, log, report)
-            engine_name = "Sidon"
-        except Exception as e:
-            log(f"  (sidon unavailable — falling back to mossformer2: {e})")
-            st.engine = used_engine = "mossformer2"
-            report.switch_engine("mossformer2")
+        def gate_music():
+            # Music gate: on speech-only content the accompaniment stem is demucs
+            # leakage (noise, hum), not music — muting it keeps the music slider
+            # from reintroducing hiss. Detected by held-note content, not stem level.
+            if not st.split_music:
+                return False
+            mv_db = dsp.music_to_voice_db(accomp, vocals, A.SR)
+            present = mv_db >= MUSIC_GATE_DB
+            log(f"  (music: {mv_db:.0f} dB re voice — "
+                f"{'kept' if present else 'none detected, channel muted'})")
+            return present
+
+        # Music detection runs while the Sidon runner restores; without a runner
+        # it stays in the separate stage, where the progress costs expect it.
+        if job is None:
+            music_present = gate_music()
+        report.begin("restore")
+        stage("enhance")
+        if job is not None:
+            job.release()
+            eta = DEFAULT_COSTS["restore.sidon"].seconds(len(orig) / A.SR)
+            log(f"  restoring voice with Sidon (~{eta:.0f}s)…")
+            music_present = gate_music()
+        if not music_present:
+            accomp = None                       # a muted channel adds nothing to the mix
+
+        engine_name = st.engine
+        used_engine = st.engine
+        key = None              # speech-presence key for the gate (generative engines)
+        if st.engine == "sidon":
+            try:
+                if job_error is not None:
+                    raise job_error
+                clean, key = _restore_sidon(orig, vocals, log, job)
+                engine_name = "Sidon"
+            except Exception as e:
+                log(f"  (sidon unavailable — falling back to mossformer2: {e})")
+                st.engine = used_engine = "mossformer2"
+                report.switch_engine("mossformer2")
     if key is not None:
         pass                    # restored, aligned and level-matched above
     elif st.engine == "mossformer2":
@@ -423,9 +455,19 @@ def enhance_file(inp: Path, out: Path | None, st: Settings, log=print,
         # voice sound rough/"wobbly" next to Adobe's.
         clean = dsp.harmonic_smooth(clean, A.SR)
 
+    breaths = None
+    if st.breaths:
+        # A restored voice keeps the breaths between phrases; Adobe's leaves them out.
+        from . import vad
+        breaths, count = dsp.breath_gain(clean, vad.speech_probability(clean, A.SR), A.SR)
+        log(f"  ({count} breath{'s' if count != 1 else ''} taken down to the pauses' level)")
+
     s, b, m = mix_coefficients(st.speech, st.background, st.music, st.linear)
     if gate is None:
         gate = voice_gate(st, None, clean)
+    if breaths is not None:
+        # Both fixed gains, so the voice stems still remix live.
+        gate = (lambda g, br: lambda x: br(g(x)))(gate, breaths)
     leveler = st.level and not generative   # measured −0.07 UTMOS on Sidon output, which is already level
     voice = s * clean
     voice += (1 - s) * vocals               # in place: the same sum, one array fewer

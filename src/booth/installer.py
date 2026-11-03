@@ -1,11 +1,10 @@
 """`booth setup`: install whatever the default pipeline is missing.
 
-Every install step runs as a child process — uv for the Sidon venv, the Sidon
-venv's own Python for its weights, this Python for htdemucs and DeepFilterNet3
-— so a cancel kills them with the process group and the main loop stays free
-to report progress. Download progress is measured by polling the size of the
-cache directories the libraries write into (huggingface_hub, torch hub,
-DeepFilterNet), against the known size of each model.
+Every download runs as a child process of this Python — the Sidon weights,
+htdemucs and ffmpeg — so a cancel kills them with the process group and the
+main loop stays free to report progress. Download progress is measured by
+polling the size of the directories the downloads write into (huggingface_hub,
+torch hub, ffmpeg's partial folder), against the known size of each.
 """
 
 from __future__ import annotations
@@ -19,15 +18,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import __version__, tools
 from . import requirements as R
-from .progress import soft_fraction
 
 TICK_S = 0.25
 DEFAULT_RATE = 8e6            # bytes/s assumed until a download has been measured
-VENV_SECONDS = 90.0           # typical uv venv + torch/transformers install
-VENV_WEIGHT_BYTES = 300e6     # the venv's share of the overall progress bar
 
-# Runs in the Sidon venv; argv names what to fetch ("sidon-weights", "w2v-bert").
+# argv names what to fetch ("sidon-weights", "w2v-bert").
 _SIDON_DOWNLOAD = f"""
 import sys, warnings
 warnings.filterwarnings("ignore")
@@ -46,33 +43,41 @@ from demucs.pretrained import get_model
 get_model("htdemucs")
 """
 
-# The archive DeepFilterNet's own loader fetches (from the repository's main
-# branch), pinned by the hashes of the files this release was tested with.
-DF3_URL = f"https://github.com/Rikorose/DeepFilterNet/raw/main/models/{R.DF3_MODEL}.zip"
-DF3_SHA256 = {
-    "config.ini": "415eb925d44990d938fb739f514aa3662c1ec0ea836cff044fa1291b82cb4290",
-    "checkpoints/model_120.ckpt.best":
-        "23b92884f63ccf54bb026014604625ab231657b6480df65db4095c4c171e6003",
+# ffmpeg and ffprobe for a Mac without them: Martin Riedl's static builds of
+# FFmpeg 9.0.2 for Apple silicon, signed with his Developer ID. The build server
+# keeps every release at its versioned address; the hashes are the ones it
+# publishes beside each zip.
+FFMPEG_BUILD = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2"
+FFMPEG_SHA256 = {
+    "ffmpeg": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+    "ffprobe": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
 }
+FFMPEG_PARTIAL = tools.BIN_DIR.with_name(tools.BIN_DIR.name + ".partial")
 
-# Extracts beside the model folder and moves it in only once every file checks
-# out, so a cut-off or changed download never reads as installed.
-_DF3_DOWNLOAD = f"""
-import hashlib, os, shutil, sys
-from df.utils import download_file, get_cache_dir
-cache = get_cache_dir()
-part = os.path.join(cache, ".{R.DF3_MODEL}.partial")
+# Unpacks beside the bin folder and moves the tools in only once both check out.
+# (The build server turns away Python's default User-Agent.)
+_FFMPEG_DOWNLOAD = f"""
+import hashlib, os, shutil, sys, urllib.request, zipfile
+part, final = {str(FFMPEG_PARTIAL)!r}, {str(tools.BIN_DIR)!r}
 shutil.rmtree(part, ignore_errors=True)
 os.makedirs(part)
 try:
-    download_file({DF3_URL!r}, part, extract=True)
-    for name, digest in {DF3_SHA256!r}.items():
-        with open(os.path.join(part, {R.DF3_MODEL!r}, name), "rb") as f:
-            if hashlib.sha256(f.read()).hexdigest() != digest:
-                sys.exit("{R.DF3_MODEL} download doesn't match the tested model: " + name)
-    final = os.path.join(cache, {R.DF3_MODEL!r})
-    shutil.rmtree(final, ignore_errors=True)
-    os.replace(os.path.join(part, {R.DF3_MODEL!r}), final)
+    for name, digest in {FFMPEG_SHA256!r}.items():
+        archive = os.path.join(part, name + ".zip")
+        request = urllib.request.Request({FFMPEG_BUILD!r} + "/" + name + ".zip",
+                                         headers={{"User-Agent": "Booth/{__version__}"}})
+        with urllib.request.urlopen(request, timeout=60) as r, open(archive, "wb") as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+        with open(archive, "rb") as f:
+            if hashlib.file_digest(f, "sha256").hexdigest() != digest:
+                sys.exit(name + " download doesn't match the tested build")
+        with zipfile.ZipFile(archive) as z:
+            z.extract(name, part)
+        os.chmod(os.path.join(part, name), 0o755)
+        os.remove(archive)
+    os.makedirs(final, exist_ok=True)
+    for name in {tuple(FFMPEG_SHA256)!r}:
+        os.replace(os.path.join(part, name), os.path.join(final, name))
 finally:
     shutil.rmtree(part, ignore_errors=True)
 """
@@ -89,14 +94,12 @@ class SetupError(Exception):
 
 @dataclass
 class Task:
-    label: str                       # "the voice engine", used in messages
+    label: str                       # "music separation model", used in messages
     covers: tuple[str, ...]          # requirement ids this task installs
     commands: list[list[str]]
-    needs: str | None = None         # label of a task that must finish first
     env: dict | None = None
     state: str = "waiting"           # waiting → running → done | failed
     proc: subprocess.Popen | None = None
-    started: float = 0.0
     tail: deque = field(default_factory=lambda: deque(maxlen=40))
     _next: int = 0
 
@@ -202,32 +205,19 @@ def check(only: set[str] | None = None) -> dict:
 
 def plan(missing: list[R.Requirement]) -> list[Task]:
     ids = {r.id for r in missing}
-    if ids & {"sidon-weights", "w2v-bert"} and not R.sidon_venv_ready():
-        ids.add("sidon-venv")         # those downloads run inside the Sidon venv
     env = dict(os.environ, HF_HUB_DISABLE_PROGRESS_BARS="1", HF_HUB_VERBOSITY="error",
                TQDM_DISABLE="1")
     tasks: list[Task] = []
-    if "sidon-venv" in ids:
-        from .engines import sidon
-        R.SIDON_VENV.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            commands = sidon.bootstrap_commands()
-        except RuntimeError as e:
-            raise SetupError("Booth couldn't find uv, which it needs to install the "
-                             "voice engine.", str(e)) from None
-        tasks.append(Task("voice engine", ("sidon-venv",), commands, env=env))
+    if "ffmpeg" in ids:
+        tasks.append(Task("ffmpeg", ("ffmpeg",), [[sys.executable, "-c", _FFMPEG_DOWNLOAD]],
+                          env=env))
     sidon_items = tuple(i for i in ("sidon-weights", "w2v-bert") if i in ids)
     if sidon_items:
-        python = str(R.SIDON_VENV / "bin" / "python")
         tasks.append(Task("Sidon voice model", sidon_items,
-                          [[python, "-c", _SIDON_DOWNLOAD, *sidon_items]],
-                          needs="voice engine" if "sidon-venv" in ids else None, env=env))
+                          [[sys.executable, "-c", _SIDON_DOWNLOAD, *sidon_items]], env=env))
     if "htdemucs" in ids:
         tasks.append(Task("music separation model", ("htdemucs",),
                           [[sys.executable, "-c", _HTDEMUCS_DOWNLOAD]], env=env))
-    if "df3" in ids:
-        tasks.append(Task("noise model", ("df3",),
-                          [[sys.executable, "-c", _DF3_DOWNLOAD]], env=env))
     return tasks
 
 
@@ -237,8 +227,8 @@ def _byte_roots(missing: list[R.Requirement]) -> dict[Path, int]:
     roots = {R.hf_hub_cache(): hub}
     if "htdemucs" in sizes:        # demucs falls back to torch hub when HF fails
         roots[R.torch_hub_checkpoints()] = sizes["htdemucs"]
-    if "df3" in sizes:
-        roots[R.deepfilter_cache()] = sizes["df3"]
+    if "ffmpeg" in sizes:
+        roots[FFMPEG_PARTIAL] = sizes["ffmpeg"]
     return {root: expected for root, expected in roots.items() if expected > 0}
 
 
@@ -248,10 +238,8 @@ def run(emit: Emit, only: set[str] | None = None,
 
     Raises SetupError on failure (running steps are terminated first).
     """
+    tools.remove_leftovers()
     missing = R.missing(only)
-    if any(r.id == "ffmpeg" for r in missing):
-        raise SetupError("Booth needs ffmpeg. Install it with Homebrew "
-                         "(brew install ffmpeg), then try again.")
     total = R.download_bytes(missing)
     if not missing:
         emit("setup", phase="weights", label="Downloading voice models",
@@ -261,12 +249,10 @@ def run(emit: Emit, only: set[str] | None = None,
     tasks = plan(missing)
     meter = ByteMeter(_byte_roots(missing))
     rates = RateMeter()
-    venv_task = next((t for t in tasks if "sidon-venv" in t.covers), None)
-    venv_weight = VENV_WEIGHT_BYTES if venv_task else 0.0
     try:
         while True:
             now = clock()
-            _advance(tasks, now)
+            _advance(tasks)
             failed = next((t for t in tasks if t.state == "failed"), None)
             if failed is not None:
                 raise SetupError(_failure_message(failed), "\n".join(failed.tail))
@@ -274,7 +260,7 @@ def run(emit: Emit, only: set[str] | None = None,
                         for i in t.covers)
             done = meter.measure(floor, total)
             rates.add(now, done)
-            emit("setup", **_status(venv_task, venv_weight, done, total, rates.rate(), now))
+            emit("setup", **_status(done, total, rates.rate()))
             if all(t.state == "done" for t in tasks):
                 break
             time.sleep(TICK_S)
@@ -287,21 +273,19 @@ def run(emit: Emit, only: set[str] | None = None,
                 except subprocess.TimeoutExpired:
                     t.proc.kill()
 
+    tools.ensure_tool_path()         # a downloaded ffmpeg's folder exists now
     still = R.missing(only)
     if still:
         names = ", ".join(r.label for r in still)
         raise SetupError(f"Setup finished, but these are still missing: {names}.")
 
 
-def _advance(tasks: list[Task], now: float) -> None:
-    by_label = {t.label: t for t in tasks}
+def _advance(tasks: list[Task]) -> None:
     for t in tasks:
         if t.state == "waiting":
-            dep = by_label.get(t.needs) if t.needs else None
-            if dep is None or dep.state == "done":
-                t.state, t.started = "running", now
-                if not t.start_next():
-                    t.state = "failed"
+            t.state = "running"
+            if not t.start_next():
+                t.state = "failed"
         elif t.state == "running":
             t.drain()
             code = t.proc.poll()
@@ -318,28 +302,15 @@ def _advance(tasks: list[Task], now: float) -> None:
                 t.state = "done"
 
 
-def _status(venv_task: Task | None, venv_weight: float, done: int, total: int,
-            rate: float | None, now: float) -> dict:
-    venv_running = venv_task is not None and venv_task.state != "done"
-    venv_frac = 1.0
-    venv_left = 0.0
-    if venv_running:
-        elapsed = now - venv_task.started if venv_task.state == "running" else 0.0
-        venv_frac = soft_fraction(elapsed / VENV_SECONDS)
-        venv_left = max(5.0, VENV_SECONDS - elapsed)
-    eta = venv_left + (total - done) / (rate or DEFAULT_RATE)
-    progress = (venv_weight * venv_frac + done) / ((venv_weight + total) or 1.0)
-    phase, label = (("engine", "Installing the voice engine") if venv_running
-                    else ("weights", "Downloading voice models"))
-    return {"phase": phase, "label": label, "bytes_done": int(done),
+def _status(done: int, total: int, rate: float | None) -> dict:
+    eta = (total - done) / (rate or DEFAULT_RATE)
+    return {"phase": "weights", "label": "Downloading voice models", "bytes_done": int(done),
             "bytes_total": int(total), "eta": round(eta, 1),
-            "progress": round(min(progress, 0.999), 4)}
+            "progress": round(min(done / (total or 1), 0.999), 4)}
 
 
 def _failure_message(task: Task) -> str:
     last = next((line.strip() for line in reversed(task.tail) if line.strip()), "")
-    if task.label == "voice engine":
-        msg = "Booth couldn't install the voice engine."
-    else:
-        msg = f"Booth couldn't download the {task.label}. Check your internet connection."
+    what = "ffmpeg" if task.label == "ffmpeg" else f"the {task.label}"
+    msg = f"Booth couldn't download {what}. Check your internet connection."
     return f"{msg} ({last[:160]})" if last else msg

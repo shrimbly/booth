@@ -9,16 +9,13 @@ import SwiftUI
 struct WorkingScreen: View {
     let model: AppModel
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         let job = model.workingJob
         let progress = job?.progress ?? 0
         ZStack(alignment: .trailing) {
-            RippleBarView(progress: progress, name: job?.name ?? "")
+            GlidingRippleBar(progress: progress, name: job?.name ?? "")
                 // A new job (after Cancel, say) starts on a fresh bar, not the last job's fill.
                 .id(job?.id)
-                .animation(PopoverMotion.unlessReduced(PopoverMotion.progress, reduceMotion), value: progress)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(job?.name ?? "")
                 .accessibilityValue([model.statusLine, model.queueLine].compactMap { $0 }.joined(separator: ". "))
@@ -35,16 +32,16 @@ struct WorkingScreen: View {
     }
 }
 
-/// The bar, drawn at `progress` so it can glide between the engine's progress updates.
-private struct RippleBarView: View, Animatable {
-    var progress: Double
+/// The bar on one clock: the ripples and the glide between the engine's progress updates are
+/// both read off a 60 fps timeline. An animation on `progress` would redraw the whole bar at the
+/// display's own rate instead (120 fps on ProMotion), and with progress arriving four times a
+/// second and each glide lasting until the next, one nearly always runs. Each tick redraws the
+/// ripples; the text only when the glide has moved it.
+private struct GlidingRippleBar: View {
+    let progress: Double
     let name: String
 
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
-
+    @State private var glide = ProgressGlide(seconds: PopoverMotion.progressSeconds)
     @Environment(\.theme) private var theme
     @Environment(\.popoverChrome) private var chrome
     @Environment(\.snapshotClock) private var snapshotClock
@@ -53,49 +50,74 @@ private struct RippleBarView: View, Animatable {
     /// The ripples' clock starts with the first bar shown.
     private static let epoch = Date()
     /// Snapshots and reduced motion hold this moment, with rings spread through the fill.
-    static let stillMilliseconds = 12_000.0
+    private static let stillMilliseconds = 12_000.0
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let front = width * min(1, max(0, progress))
-            ZStack {
-                ripples(front: front)
-                text(front: front, width: width)
+            if let still {
+                bar(progress: progress, milliseconds: still, width: width)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 60)) { context in
+                    bar(progress: glide.value(target: progress, at: context.date),
+                        milliseconds: context.date.timeIntervalSince(Self.epoch) * 1000, width: width)
+                }
             }
         }
         .frame(height: RippleBar.height)
         .background(theme.inkTrack)
-    }
-
-    @ViewBuilder
-    private func ripples(front: Double) -> some View {
-        if chrome == .snapshot || reduceMotion {
-            let milliseconds = chrome == .snapshot ? snapshotClock ?? Self.stillMilliseconds : Self.stillMilliseconds
-            RippleCanvas(front: front, milliseconds: milliseconds)
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 60)) { context in
-                RippleCanvas(front: front, milliseconds: context.date.timeIntervalSince(Self.epoch) * 1000)
-            }
+        .onChange(of: progress) { old, new in
+            glide.add(new - old, at: .now)
         }
     }
 
-    /// The text, once per colour and focus, each drawing masked to where it belongs.
-    private func text(front: Double, width: Double) -> some View {
-        let percent = Int((min(1, max(0, progress)) * 100).rounded())
+    /// The bar at `progress`, its ripples at `milliseconds` on their clock.
+    private func bar(progress: Double, milliseconds: Double, width: Double) -> some View {
+        let progress = min(1, max(0, progress))
         return ZStack {
+            RippleCanvas(front: width * progress, milliseconds: milliseconds)
+            // Equatable, so a tick that leaves progress where it was skips the text's layers.
+            RippleBarText(progress: progress, name: name, width: width).equatable()
+        }
+    }
+
+    /// The moment the ripples hold in snapshots and with reduced motion, which has no glide
+    /// either; nil while they move.
+    private var still: Double? {
+        if chrome == .snapshot { return snapshotClock ?? Self.stillMilliseconds }
+        return reduceMotion ? Self.stillMilliseconds : nil
+    }
+}
+
+/// The bar's text at `progress`, once per colour and focus, each drawing masked to where it
+/// belongs.
+private struct RippleBarText: View, Equatable {
+    let progress: Double
+    let name: String
+    let width: Double
+
+    @Environment(\.theme) private var theme
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.progress == b.progress && a.name == b.name && a.width == b.width
+    }
+
+    var body: some View {
+        let front = width * progress
+        let percent = Int((progress * 100).rounded())
+        ZStack {
             WorkingRow(percent: percent, name: name, color: theme.text, showsMarks: true, nameLayer: nil)
-                .mask(gradient(WorkingText.marks, front: front, width: width))
+                .mask(gradient(WorkingText.marks, front: front))
             ForEach(Array(WorkingText.nameLayers.enumerated()), id: \.offset) { _, layer in
                 WorkingRow(percent: percent, name: name, color: layer.onFill ? theme.onInk : theme.text, showsMarks: false, nameLayer: layer)
-                    .mask(gradient(layer.fade, front: front, width: width))
+                    .mask(gradient(layer.fade, front: front))
             }
             WorkingRow(percent: percent, name: name, color: theme.onInk, showsMarks: true, nameLayer: nil)
-                .mask(gradient(WorkingText.marksOnFill, front: front, width: width))
+                .mask(gradient(WorkingText.marksOnFill, front: front))
         }
     }
 
-    private func gradient(_ fade: FrontFade, front: Double, width: Double) -> LinearGradient {
+    private func gradient(_ fade: FrontFade, front: Double) -> LinearGradient {
         LinearGradient(
             stops: fade.stops(front: front, width: width).map { Gradient.Stop(color: .black.opacity($0.alpha), location: $0.location) },
             startPoint: .leading, endPoint: .trailing)

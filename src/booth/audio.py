@@ -7,12 +7,16 @@ import json
 import re
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 SR = 48000
+# The most audio decode() sets aside up front, so a broken duration can't ask
+# for more than this; longer audio still decodes, the array grows to fit it.
+_MAX_GUESS_S = 4 * 3600
 
 
 class FfmpegError(RuntimeError):
@@ -111,14 +115,16 @@ def _unknown_layout(stream: dict) -> bool:
     return layout == "unknown" or re.fullmatch(r"\d+ channels", layout) is not None
 
 
-def decode(path: str | Path, sr: int = SR) -> np.ndarray:
+def decode(path: str | Path, sr: int = SR, info: dict | None = None) -> np.ndarray:
     """Decode the audio track probe() picks from any ffmpeg-readable file to
-    float32 mono [T] at sr.
+    float32 mono [T] at sr. `info` is probe(path), when the caller has it.
 
     Gaps in the track's timestamps come back as silence, so each sample stays
     where it played in the input; the track's start offset is dropped.
     """
-    audio = probe(path)["audio"]
+    if info is None:
+        info = probe(path)
+    audio = info["audio"]
     cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-vn"]
     if audio is not None:
         cmd += ["-map", f"0:{audio['index']}"]
@@ -130,10 +136,37 @@ def decode(path: str | Path, sr: int = SR) -> np.ndarray:
         filters.insert(0, "pan=mono|c0<" + "+".join(f"c{i}" for i in range(channels)))
     cmd += ["-af", ",".join(filters),
             "-f", "f32le", "-acodec", "pcm_f32le", "-ac", "1", "-ar", str(sr), "-"]
-    p = subprocess.run(cmd, capture_output=True)
-    if p.returncode != 0:
-        raise _failed(cmd, p.returncode, p.stderr.decode(errors="replace"))
-    return np.frombuffer(p.stdout, dtype=np.float32).copy()
+    # stderr goes to a file, so ffmpeg can't stall on a full pipe while we read.
+    with tempfile.TemporaryFile() as errors:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors) as p:
+            try:
+                samples = _read_samples(p.stdout, info["duration"], sr)
+            except BaseException:
+                p.kill()
+                raise
+        if p.returncode != 0:
+            errors.seek(0)
+            raise _failed(cmd, p.returncode, errors.read().decode(errors="replace"))
+    return samples
+
+
+def _read_samples(stream, seconds: float, sr: int) -> np.ndarray:
+    """Every float32 sample in `stream`, read straight into one array sized for
+    `seconds` and one more (grown if the stream runs longer). Read as bytes and
+    then copied, the audio took three times its size at the peak."""
+    out = np.empty(int(min(max(seconds, 0.0), _MAX_GUESS_S) * sr) + sr, np.float32)
+    got = 0                                     # bytes
+    while True:
+        if got == out.nbytes:
+            grown = np.empty(2 * len(out), np.float32)
+            grown[:len(out)] = out
+            out = grown
+        read = stream.readinto(memoryview(out).cast("B")[got:])
+        if not read:
+            break
+        got += read
+    n = got // 4
+    return out[:n] if n > 0.99 * len(out) else out[:n].copy()    # keep at most 1% unused
 
 
 def write_wav(path: str | Path, audio: np.ndarray, sr: int = SR, subtype: str = "PCM_16") -> None:
